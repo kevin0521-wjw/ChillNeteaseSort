@@ -1,11 +1,13 @@
 # ChillNetease Sort
 
-给 [ChillNetease](https://github.com/V2tin19/ChillNetease)（《Chill with You: Lo-Fi Story》的网易云音乐插件）加两个能力：
-
-1. **歌单按口味排序** —— 按「听歌次数」或「最近收藏」重排注入到游戏原生播放列表的歌曲
-2. **每次开游戏自动联网刷新** —— 启动时重新拉一遍听歌排行/收藏顺序，并把上次恢复的歌单同步成云端最新版本
-
+> 给 [ChillNetease](https://github.com/V2tin19/ChillNetease)（《Chill with You: Lo-Fi Story》的网易云音乐插件）加两个能力：
+>
+> 1. **歌单按口味排序** —— 按「听歌次数」或「最近收藏」重排注入到游戏原生播放列表的歌曲
+> 2. **每次开游戏自动联网刷新** —— 启动时重新拉一遍听歌排行/收藏顺序，并把上次恢复的歌单同步成云端最新版本
+>
 > 独立插件，**不修改** ChillNetease 的任何文件；卸载本插件即完全恢复原样。
+
+**下载：[最新 Release](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest)**（`ChillNeteaseSort.dll`，~37 KB）· MIT
 
 ---
 
@@ -31,9 +33,9 @@ ChillNetease 把网易云歌单注入游戏原生播放器后，顺序永远是�
 
 前提：已安装 **ChillNetease 0.3.1+**（本插件是它的补丁，靠它的桥接和面板工作）。
 
-1. 下载 `ChillNeteaseSort.dll`
+1. 从 [Releases](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest) 下载 `ChillNeteaseSort.dll`（或自己 `build.ps1` 编）
 2. 放进游戏的 `BepInEx\plugins\ChillNeteaseSort\` 目录（文件夹名随意，但**不要**放进 `plugins\ChillNetease\`，那是上游的地盘）
-3. 启动游戏
+3. 启动游戏，进游戏后按 **F11** 试一下
 
 最终目录长这样：
 
