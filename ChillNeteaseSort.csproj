@@ -1,0 +1,86 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>ChillNeteaseSort</AssemblyName>
+    <RootNamespace>ChillNeteaseSort</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Company>kevin0521-wjw</Company>
+    <Product>ChillNetease Sort</Product>
+    <Description>ChillNetease 的歌单排序增强：按听歌次数 / 最近收藏排序，启动自动联网刷新</Description>
+    <Copyright>MIT</Copyright>
+
+    <!-- 只编插件本体，不生成符号包 / 不做源码链接（CI 与本地都不需要） -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <EnableSourceLink>false</EnableSourceLink>
+    <DeterministicSourcePaths>false</DeterministicSourcePaths>
+    <DebugType>none</DebugType>
+
+    <!-- 游戏安装目录：可用 -p:GameDir=... 覆盖 -->
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Chill with You Lo-Fi Story</GameDir>
+    <ManagedDir>$(GameDir)\Chill With You_Data\Managed</ManagedDir>
+    <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
+    <NeteasePluginDir>$(GameDir)\BepInEx\plugins\ChillNetease</NeteasePluginDir>
+  </PropertyGroup>
+
+  <Target Name="ValidateGameDirectory" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(BepInExCore)\BepInEx.dll')" Text="找不到 BepInEx：$(BepInExCore)。请先安装 ChillNetease（含 BepInEx），或用 -p:GameDir=... 指定游戏目录。" />
+    <Error Condition="!Exists('$(NeteasePluginDir)\ChillNetease.Plugin.dll')" Text="找不到 ChillNetease.Plugin.dll：$(NeteasePluginDir)。本插件是其增强补丁，需要先安装 ChillNetease。" />
+  </Target>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCore)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- 上游插件：仅用于 Harmony 定位与类型引用，不随本插件分发 -->
+    <Reference Include="ChillNetease.Plugin">
+      <HintPath>$(NeteasePluginDir)\ChillNetease.Plugin.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UnityWebRequestModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(ManagedDir)\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- 游戏主程序集：用到 MusicService 类型（只是读它的单例，不做任何修改） -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,13 @@
+# 构建产物
+bin/
+obj/
+dist/
+
+# 本地工具链 / 探测缓存（绝不入库）
+.vs/
+*.user
+*.suo
+
+# 运行时产物
+*.log
+ChillNeteaseSort.cache.json
