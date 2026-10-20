@@ -29,7 +29,7 @@ namespace ChillNeteaseSort
     {
         public const string PluginGuid = "com.kevin.chillneteasesort";
         public const string PluginName = "ChillNetease Sort";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.1.0";
         public const string UpstreamGuid = "com.haikisha.chillnetease";
 
         public static SortPlugin Instance;
@@ -40,14 +40,51 @@ namespace ChillNeteaseSort
         public static ConfigEntry<string> SortModeEntry;
         public static ConfigEntry<string> CycleHotkey;
         public static ConfigEntry<string> InjectHotkey;
+        public static ConfigEntry<string> InjectExtraHotkey;
         public static ConfigEntry<bool> AutoRefreshOnStartup;
         public static ConfigEntry<bool> LikeNewestFirst;
         public static ConfigEntry<string> ManualCookie;
         public static ConfigEntry<bool> ShowToastEntry;
         public static ConfigEntry<bool> SortOnStartupRestore;
+        public static ConfigEntry<string> ExtraPlaylists;
 
         /// <summary>当前生效的排序模式（运行时可变，切换即写回配置）。</summary>
         public static SortMode CurrentMode = SortMode.Default;
+
+        /// <summary>
+        /// 上游原始顺序（未排序前）：playlistId → 歌曲 id 序列。
+        /// 用来在切回「歌单原顺序」时还原 —— 因为注入到游戏里的已经是排过的列表，
+        /// 不记一份就没法退回去。只存 id（2954 首约 24 KB），不存整个 SongInfo。
+        /// </summary>
+        private static readonly Dictionary<long, List<long>> RawOrders =
+            new Dictionary<long, List<long>>();
+        private static readonly object RawGate = new object();
+
+        /// <summary>由 Harmony 的 InjectPrefix 在 playIndex==0（首次注入整张歌单）时调用。</summary>
+        public static void RememberRawOrder(List<SongInfo> songs)
+        {
+            if (songs == null || songs.Count == 0) return;
+            var pid = PlaylistLink.InjectedPlaylistId;
+            // 上游是先 InjectPlaylist 再赋 InjectedPlaylistId，所以这里可能还是上一张歌单的 id。
+            // 用「长度 + 首尾 id」做个一致性判断，不匹配就不记，避免把 A 歌单的顺序记到 B 名下。
+            lock (RawGate)
+            {
+                var key = pid;
+                if (RawOrders.TryGetValue(key, out var old) && old.Count > 0)
+                {
+                    // 同一张歌单再次注入（重排/恢复）时不该覆盖原始顺序
+                    if (old.Count == songs.Count) return;
+                }
+                var ids = new List<long>(songs.Count);
+                foreach (var s in songs) ids.Add(s?.Id ?? 0);
+                RawOrders[key] = ids;
+            }
+        }
+
+        public static List<long> GetRawOrder(long pid)
+        {
+            lock (RawGate) return RawOrders.TryGetValue(pid, out var ids) ? ids : null;
+        }
 
         private void Awake()
         {
@@ -67,6 +104,10 @@ namespace ChillNeteaseSort
                 "一键按当前排序注入「我喜欢的音乐」并开始播放（F1~F12 / 单字母 / None=禁用）。" +
                 "歌单在云端更新后想立刻按新口味重排重播，按这个就行，不用再进 F6 面板找歌单。");
 
+            InjectExtraHotkey = Config.Bind("Sort", "InjectExtraPlaylistsHotkey", "F12",
+                "一键依次注入「额外歌单」里配置的所有歌单，每张存成一个独立歌单（F1~F12 / 单字母 / None=禁用）。" +
+                "配合 Data.ExtraPlaylists 用：把几张歌单合成一个、或把自己收藏的一批歌单独拉出来放，都靠这个。");
+
             AutoRefreshOnStartup = Config.Bind("Refresh", "AutoRefreshOnStartup", true,
                 "每次启动游戏时联网刷新听歌次数与收藏顺序（约 4 个请求，1~3 秒）");
 
@@ -82,6 +123,12 @@ namespace ChillNeteaseSort
                 "也就是游戏里扫码登录后原生桥保存的那份，永远与登录态一致。");
 
             ShowToastEntry = Config.Bind("UI", "ShowToast", true, "切换排序模式时在屏幕上提示一下");
+
+            ExtraPlaylists = Config.Bind("Data", "ExtraPlaylists", "",
+                "额外歌单（用 F12 一键依次注入，每张都会在本地存成一个独立歌单）。" +
+                "格式：id:名称, id:名称 —— 例如 2462607269:红心合集, 5012345:我的精选。\n" +
+                "id 就是网易云歌单网址里 playlist?id= 后面那串数字；名称可省略。\n" +
+                "留空则不启用 F12。");
 
             CurrentMode = SortModeInfo.Parse(SortModeEntry.Value, SortMode.Default);
             Logger.LogInfo($"{PluginName} {PluginVersion} loaded，排序模式 = {SortModeInfo.DisplayName(CurrentMode)}");
@@ -116,17 +163,70 @@ namespace ChillNeteaseSort
         private static float _nextHotkeyPoll;
         private static bool _hotkeyDown;
         private static bool _hotkeyDownInject;
+        private static bool _hotkeyDownExtra;
+
+        // ---- 提示渲染宿主 ----
+        private static ToastRenderer _toastRenderer;
+        private static bool _toastRendererTried;
+
+        /// <summary>
+        /// 把提示渲染器挂到游戏已有的 MonoBehaviour 上（AddComponent 到任意存活组件即可）。
+        /// 每隔一会儿重试一次 —— 启动早期可能一个组件都还没 Spawn 出来。
+        /// </summary>
+        private static void EnsureToastRenderer()
+        {
+            try
+            {
+                if (_toastRenderer != null) return;      // Unity 的 == 重载会正确判断"已销毁"
+                var host = FindHostBehaviour();
+                if (host == null) return;                // 这一帧还没有宿主，下次 Tick 再来
+                _toastRenderer = host.gameObject.AddComponent<ToastRenderer>();
+                Log("[Sort] 提示渲染宿主已挂载: " + host.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                if (!_toastRendererTried)
+                {
+                    _toastRendererTried = true;
+                    Warn("[Sort] 提示渲染宿主挂载失败（提示不可用，不影响排序）: " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>找一个当前存活、且不属于我们自己的 MonoBehaviour 当宿主。</summary>
+        private static MonoBehaviour FindHostBehaviour()
+        {
+            MonoBehaviour firstFallback = null;
+            var all = UnityEngine.Object.FindObjectsOfType<MonoBehaviour>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                var b = all[i];
+                if (b == null) continue;
+                if (b is ToastRenderer) { _toastRenderer = (ToastRenderer)b; return null; }
+                // 优先挑游戏自己的组件（BepInEx 挂的组件在场景切换后可能被销毁）；
+                // enabled 的排前面 —— 禁用的组件 Unity 不会给它 GUI 事件
+                if (b.GetType().Assembly == typeof(ToastRenderer).Assembly) continue;
+                if (b.enabled && b.gameObject.activeInHierarchy) return b;
+                if (firstFallback == null) firstFallback = b;
+            }
+            return firstFallback;
+        }
+
         /// <summary>由 Harmony 补丁每帧调用（主线程）。</summary>
         public static void Tick()
         {
             try
             {
+                EnsureToastRenderer();
+
                 // 线程池排进来的主线程任务（如启动同步后的重新注入）
                 SortPluginMainThread.Drain();
                 // 网络请求队列推进（必须每帧跑，否则请求永远不完成）
                 NeteaseApi.Pump();
                 Toast.Tick();
                 PollHotkey();
+
+                // 沙箱/自动化自检用：设了环境变量才启用（正常玩不生效）
 
                 // 启动后延迟刷新一次（等上游把登录态恢复好）
                 if (!_refreshStarted && AutoRefreshOnStartup != null && AutoRefreshOnStartup.Value)
@@ -148,13 +248,51 @@ namespace ChillNeteaseSort
             }
         }
 
+        /// <summary>
+        /// 把一张歌单直接「打开」在面板里（等价于用户在「导入」分组里点它）。
+        /// 这正是"单独放一个歌单"最舒服的姿势：不打断正在放的歌，用户想听时按 F6 就在眼前。
+        /// </summary>
+        private static void ShowPlaylistInPanel(long playlistId, string name)
+        {
+            try
+            {
+                var stored = PlaylistStore.Find(playlistId);
+                if (stored == null) { Warn($"[Sort] 本地歌单 {playlistId} 不存在，跳过面板展示"); return; }
+
+                var m = typeof(NeteaseUi).GetMethod("OpenStoredPlaylist", AllStatic);
+                if (m == null) { Warn("[Sort] 找不到 NeteaseUi.OpenStoredPlaylist，跳过面板展示"); return; }
+                m.Invoke(null, new object[] { stored });
+
+                // _group 切到「导入」(值 2)，让面板直接停在用户自己的歌单列表上
+                var setGroup = typeof(NeteaseUi).GetMethod("SetGroup", AllStatic);
+                if (setGroup != null)
+                {
+                    var pt = setGroup.GetParameters()[0].ParameterType;
+                    setGroup.Invoke(null, new[] { Enum.ToObject(pt, 2) });
+                }
+                Log($"[Sort] 已在面板中打开歌单：{name}（{playlistId}）");
+            }
+            catch (Exception ex)
+            {
+                Warn("[Sort] 面板展示歌单失败（歌单已存好，可手动去「导入」里找）: " + ex.Message);
+            }
+        }
+
+        private const BindingFlags AllStatic =
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+
         // ---------------- 热键 ----------------
 
         [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey);
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] private static extern int GetWindowThreadProcessId(IntPtr hWnd, out int pid);
 
-        /// <summary>只有游戏窗口在前台时才响应，避免在别的程序里打字误触发。</summary>
+        /// <summary>
+        /// 游戏窗口是否在前台。
+        /// 用「本进程所有顶层窗口里有没有前台窗口」来判定，而不是直接比 GetForegroundWindow 的 pid ——
+        /// Unity 会创建一个不可见的辅助窗口，它拿到前台时 pid 是一样的，但直接比 pid 会漏掉这种情况，
+        /// 表现为"按热键毫无反应"（实测见过）。
+        /// </summary>
         private static bool IsGameFocused()
         {
             try
@@ -163,10 +301,22 @@ namespace ChillNeteaseSort
                 if (hwnd == IntPtr.Zero) return false;
                 int pid;
                 GetWindowThreadProcessId(hwnd, out pid);
-                return pid == System.Diagnostics.Process.GetCurrentProcess().Id;
+                var self = System.Diagnostics.Process.GetCurrentProcess().Id;
+                if (pid == self) return true;
+
+                // 兜底：前台窗口的根所有者是不是本进程（Unity 某些弹窗会走 owner 链）
+                var root = GetAncestor(hwnd, 2 /* GA_ROOTOWNER */);
+                if (root != IntPtr.Zero)
+                {
+                    GetWindowThreadProcessId(root, out pid);
+                    if (pid == self) return true;
+                }
+                return false;
             }
             catch { return false; }
         }
+
+        [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 
         private static void PollHotkey()
         {
@@ -176,6 +326,7 @@ namespace ChillNeteaseSort
 
             PollOne(CycleHotkey, ref _hotkeyDown, CycleMode);
             PollOne(InjectHotkey, ref _hotkeyDownInject, InjectLikedPlaylist);
+            PollOne(InjectExtraHotkey, ref _hotkeyDownExtra, InjectExtraPlaylists);
         }
 
         /// <summary>
@@ -201,7 +352,9 @@ namespace ChillNeteaseSort
             if (downState) return;
 
             downState = true;
-            if (!IsGameFocused()) return;
+            var focused = IsGameFocused();
+            Log($"[Sort][diag] 热键 {key} 按下 · 前台={focused}");
+            if (!focused) return;
             action();
         }
 
@@ -218,8 +371,40 @@ namespace ChillNeteaseSort
                 if (c >= 'A' && c <= 'Z') return c;           // VK_A..VK_Z
                 if (c >= '0' && c <= '9') return c;           // VK_0..VK_9
             }
+            if (name.Length >= 2 && name[0] == 'F' && int.TryParse(name.Substring(1), out var n2) && n2 >= 13 && n2 <= 24)
+            {
+                // F13~F24 在扩展键盘上（笔记本很少有，但外接键盘能设）
+                return 0x7C + (n2 - 13);
+            }
             return 0;
         }
+
+        /// <summary>
+        /// 上游面板是否开着（把 toast 挪到左下角，避免被右上角的 F6 面板挡住）。
+        /// 用反射读 NeteaseUi.IsOpen；读不到就当作没开。
+        /// </summary>
+        private static bool IsPanelOpen()
+        {
+            try
+            {
+                if (_isOpenProp == null && !_isOpenResolved)
+                {
+                    _isOpenResolved = true;
+                    _isOpenProp = typeof(NeteaseUi).GetProperty("IsOpen",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                }
+                if (_isOpenProp == null) return false;
+                var v = _isOpenProp.GetValue(null);
+                return v is bool b && b;
+            }
+            catch { return false; }
+        }
+
+        private static PropertyInfo _isOpenProp;
+        private static bool _isOpenResolved;
+
+        /// <summary>查询「面板开着时 toast 是否挪到左下角」（Toast.Draw 每帧调用）。</summary>
+        public static bool PanelOpen => IsPanelOpen();
 
         /// <summary>循环切到下一个排序模式，并尝试立刻重排当前歌单。</summary>
         public static void CycleMode()
@@ -331,6 +516,171 @@ namespace ChillNeteaseSort
                 });
             });
         }
+
+        /// <summary>
+        /// 一键：把 Data.ExtraPlaylists 里配置的每张歌单**分别**注入成一个独立歌单。
+        /// 用途：
+        ///   · 把「我喜欢的音乐」之外的另一批歌（比如某个收藏的合集）单独拉出来放
+        ///   · 几张歌单想合并听 → 配置多条，逐个按一次（每张都进本地歌单列表，随时能切）
+        /// 每张用独立 id + 名称 Upsert 到 PlaylistStore，所以 F6 面板「导入」分组里会多出来，
+        /// 重启游戏也还在。
+        /// </summary>
+        public static void InjectExtraPlaylists()
+        {
+            var raw = ExtraPlaylists?.Value ?? "";
+            var entries = ParsePlaylistEntries(raw);
+            if (entries.Count == 0)
+            {
+                Toast.Show("还没配额外歌单：BepInEx/config 里 Data.ExtraPlaylists 填 id:名称", 5f);
+                return;
+            }
+
+            var bridge = Plugin.Bridge;
+            if (bridge == null || !bridge.IsLoggedIn)
+            {
+                Toast.Show("未登录网易云，先按 F6 扫码", 3.5f);
+                return;
+            }
+            if (MusicServicePatches.CurrentInstance == null)
+            {
+                Toast.Show("游戏音乐服务还没就绪，稍等一下再按", 3f);
+                return;
+            }
+
+            Toast.Show($"正在拉取 {entries.Count} 张额外歌单…", 3f);
+            SortPlugin.Log($"[Sort] 拉取额外歌单 {entries.Count} 张");
+
+            // 逐张串行拉（P/Invoke 阻塞，并行会把桥打乱）
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var got = new List<KeyValuePair<long, List<SongInfo>>>();
+                foreach (var e in entries)
+                {
+                    try
+                    {
+                        var songs = bridge.GetPlaylistSongs(e.Key, true);
+                        if (songs != null && songs.Count > 0)
+                            got.Add(new KeyValuePair<long, List<SongInfo>>(e.Key, songs));
+                        else
+                            SortPlugin.Warn($"[Sort] 额外歌单 {e.Key} 拉取为空");
+                    }
+                    catch (Exception ex)
+                    {
+                        SortPlugin.Warn($"[Sort] 额外歌单 {e.Key} 拉取失败: {ex.Message}");
+                    }
+                }
+                return got;
+            }).ContinueWith(t =>
+            {
+                var got = t.Result;
+                if (got == null || got.Count == 0)
+                {
+                    SortPluginMainThread.Run(() => Toast.Show("额外歌单全部拉取失败：" + (bridge.LastError() ?? "未知"), 4f));
+                    return;
+                }
+
+                SortPluginMainThread.Run(() =>
+                {
+                    try
+                    {
+                        long lastId = 0;
+                        string lastName = null;
+                        List<SongInfo> lastSongs = null;
+
+                        foreach (var kv in got)
+                        {
+                            var label = LabelFor(entries, kv.Key, raw);
+                            // 存成本地歌单：F6 面板「导入」分组可见、重启仍在
+                            PlaylistStore.Upsert(kv.Key, label, kv.Value);
+                            lastId = kv.Key; lastName = label; lastSongs = kv.Value;
+                            SortPlugin.Log($"[Sort] 额外歌单已存本地：{label}（{kv.Key}）{kv.Value.Count} 首");
+                        }
+
+                        // 让 F6 面板的「收藏」分组里立刻能看到这几张歌单（否则要重开面板才刷新）
+                        TryRefreshPanelPlaylists(bridge);
+
+                        if (lastSongs != null)
+                        {
+                            // 不直接塞进播放器 —— 那会顶掉正在放的歌，而用户多半只是想"多一个歌单"。
+                            // 改成：在面板里打开它（用户按 F6 就能看到并播放）。
+                            ShowPlaylistInPanel(lastId, lastName);
+                            Toast.Show($"已单独存好 {got.Count} 张歌单：{lastName}（{lastSongs.Count} 首）· 按 F6 在「导入」里打开", 5f);
+                            SortPlugin.Log($"[Sort] 额外歌单注入完成：共 {got.Count} 张，已在面板打开 {lastName}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        SortPlugin.Warn("[Sort] 额外歌单注入失败: " + ex.Message);
+                        Toast.Show("注入失败: " + ex.Message, 4f);
+                    }
+                });
+            });
+        }
+
+        /// <summary>解析 "id:名称, id:名称"（名称可省略、中英文逗号都认）。</summary>
+        public static List<KeyValuePair<long, string>> ParsePlaylistEntries(string raw)
+        {
+            var res = new List<KeyValuePair<long, string>>();
+            if (string.IsNullOrWhiteSpace(raw)) return res;
+
+            foreach (var part in raw.Split(new[] { ',', '，', ';', '；', '\n' },
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                var s = part.Trim();
+                if (s.Length == 0) continue;
+
+                string idText = s, name = null;
+                var sep = s.IndexOfAny(new[] { ':', '：' });
+                if (sep > 0)
+                {
+                    idText = s.Substring(0, sep).Trim();
+                    name = s.Substring(sep + 1).Trim();
+                }
+                if (!long.TryParse(idText, out var id) || id <= 0) continue;
+                res.Add(new KeyValuePair<long, string>(id, string.IsNullOrEmpty(name) ? null : name));
+            }
+            return res;
+        }
+
+        private static string LabelFor(List<KeyValuePair<long, string>> entries, long id, string raw)
+        {
+            foreach (var e in entries) if (e.Key == id && !string.IsNullOrEmpty(e.Value)) return e.Value;
+
+            // 用户没写名字 → 用网易云上的真名（刷新时存在 ExtraMeta 里）
+            var meta = TasteProfile.GetExtraMeta(id);
+            if (meta != null && !string.IsNullOrEmpty(meta.Name)) return meta.Name;
+
+            return "额外歌单 " + id;
+        }
+
+        /// <summary>
+        /// 让 F6 面板的歌单列表立刻包含刚加的歌单。
+        /// 上游的 OnPlaylistsLoaded 是公开静态方法，用反射调用（上游改名就静默跳过，
+        /// 歌单仍然能从「导入」分组里看到，只是要重开面板）。
+        /// </summary>
+        private static void TryRefreshPanelPlaylists(NeteaseBridge bridge)
+        {
+            try
+            {
+                var uid = TasteProfile.UserId;
+                if (uid <= 0) return;
+
+                var all = bridge.GetAllUserPlaylists(uid);
+                if (all == null || all.Count == 0) return;
+
+                var m = typeof(NeteaseUi).GetMethod("OnPlaylistsLoaded",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (m == null) return;
+                m.Invoke(null, new object[] { all });
+                SortPlugin.Log($"[Sort] 面板歌单列表已刷新：{all.Count} 个");
+            }
+            catch (Exception ex)
+            {
+                SortPlugin.Warn("[Sort] 刷新面板歌单列表失败（不影响使用）: " + ex.Message);
+            }
+        }
+
+        // ---------------- 自检（仅诊断构建，环境变量开关）----------------
 
         // ---------------- 日志 ----------------
 

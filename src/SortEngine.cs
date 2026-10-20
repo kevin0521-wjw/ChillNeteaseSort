@@ -36,6 +36,13 @@ namespace ChillNeteaseSort
                     return ByLikeRank(songs, newestFirst: true);
                 case SortMode.OldestLiked:
                     return ByLikeRank(songs, newestFirst: false);
+                case SortMode.Album:
+                    return ByGroup(songs, s => s.Album, "专辑", s => s.Album ?? "");
+                case SortMode.Artist:
+                    return ByGroup(songs, s => (s.Artists != null && s.Artists.Count > 0) ? s.Artists[0] : null,
+                        "歌手", s => (s.Artists != null && s.Artists.Count > 0) ? s.Artists[0] : "未知歌手");
+                case SortMode.Title:
+                    return ByGroup(songs, s => s.Name, "歌名", s => s.Name ?? "");
                 default:
                     res.Note = "原顺序（不做处理）";
                     return res;
@@ -97,6 +104,58 @@ namespace ChillNeteaseSort
                       (changed ? "" : "（顺序未变：本歌单原本就是这个顺序）")
             };
         }
+
+        /// <summary>
+        /// 按某个文本字段归组（专辑 / 歌手 / 歌名）。
+        /// 组与组按名字排序，**组内保持原相对顺序** —— LINQ 的 OrderBy 是稳定排序，
+        /// 所以同专辑/同歌手的几首歌不会被随机打乱，仍然按原来的先后来。
+        /// 空值（歌手/专辑缺失）统一排到最后，用一个不可能出现的键占位。
+        /// </summary>
+        private static Result ByGroup(List<SongInfo> songs, Func<SongInfo, string> selector,
+            string label, Func<SongInfo, string> displaySelector)
+        {
+            const string Tail = "\uFFFF\uFFFF";   // 撞不到任何正常名称，保证空值排最后
+
+            int matched = 0;
+            var sorted = songs
+                .OrderBy(s =>
+                {
+                    if (s == null) return Tail;
+                    var key = selector(s);
+                    if (!string.IsNullOrWhiteSpace(key)) { matched++; return Normalize(key); }
+                    return Tail;
+                }, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var changed = !SameOrder(songs, sorted);
+
+            // 组数 = 不同的非空键数量，用来在日志里说明"分了几张专辑"
+            var groups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in songs)
+            {
+                if (s == null) continue;
+                var key = selector(s);
+                if (!string.IsNullOrWhiteSpace(key)) groups.Add(Normalize(key));
+            }
+
+            return new Result
+            {
+                Songs = sorted,
+                Changed = changed,
+                Matched = matched,
+                Note = groups.Count == 0
+                    ? $"没有可用的「{label}」信息"
+                    : $"按「{label}」归组，{groups.Count} 组，命中 {matched}/{songs.Count} 首" +
+                      (changed ? "" : "（顺序未变：本歌单原本就是这个顺序）")
+            };
+        }
+
+        /// <summary>
+        /// 归组用的键规整：去首尾空白、忽略大小写。
+        /// 中文名称不能直接做拼音排序（.NET 在 netstandard2.1 上拿不到中文区域排序规则，
+        /// 用 OrdinalIgnoreCase 至少能保证「同名必相邻」这一核心语义）。
+        /// </summary>
+        private static string Normalize(string s) => s == null ? "" : s.Trim();
 
         private static bool SameOrder(List<SongInfo> a, List<SongInfo> b)
         {

@@ -34,6 +34,36 @@ namespace ChillNeteaseSort
 
         public static long UserId { get; private set; }
         public static long LikedPlaylistId { get; private set; }
+
+        /// <summary>
+        /// 额外歌单的元信息：id → (名称, 歌曲数)。
+        /// 红心歌单靠 specialType==5 自己在列表里找得到，其它歌单只能靠用户配 id，
+        /// 所以拿到 detail 时顺手把名字和数量记下来，注入时用来给本地歌单起名。
+        /// </summary>
+        public static Dictionary<long, PlaylistMeta> ExtraMeta { get; private set; } =
+            new Dictionary<long, PlaylistMeta>();
+
+        public sealed class PlaylistMeta
+        {
+            public string Name;
+            public int SongCount;
+        }
+
+        public static void SetExtraMeta(long id, string name, int songCount)
+        {
+            if (id <= 0) return;
+            lock (Gate)
+            {
+                if (string.IsNullOrEmpty(name) && songCount <= 0) return;
+                ExtraMeta[id] = new PlaylistMeta { Name = name, SongCount = songCount };
+            }
+        }
+
+        public static PlaylistMeta GetExtraMeta(long id)
+        {
+            lock (Gate) return ExtraMeta.TryGetValue(id, out var m) ? m : null;
+        }
+
         public static DateTime UpdatedAtUtc { get; private set; } = DateTime.MinValue;
         public static string LastError { get; private set; }
 
@@ -76,6 +106,7 @@ namespace ChillNeteaseSort
             [JsonProperty("playCountAll")] public Dictionary<long, int> PlayCountAll { get; set; }
             [JsonProperty("playCountWeek")] public Dictionary<long, int> PlayCountWeek { get; set; }
             [JsonProperty("likeOrder")] public List<long> LikeOrder { get; set; }
+            [JsonProperty("extraMeta")] public Dictionary<long, PlaylistMeta> ExtraMeta { get; set; }
         }
 
         public static void LoadCache()
@@ -95,6 +126,7 @@ namespace ChillNeteaseSort
                     PlayCountAll = dto.PlayCountAll ?? new Dictionary<long, int>();
                     PlayCountWeek = dto.PlayCountWeek ?? new Dictionary<long, int>();
                     LikeRank = BuildRank(dto.LikeOrder);
+                    ExtraMeta = dto.ExtraMeta ?? new Dictionary<long, PlaylistMeta>();
 
                     SortPlugin.Log($"[Sort] 口味档案缓存已加载：听歌次数 {PlayCountAll.Count}/{PlayCountWeek.Count} 首，" +
                         $"收藏顺序 {LikeRank.Count} 首（{AgeText}）");
@@ -132,7 +164,8 @@ namespace ChillNeteaseSort
                         PlayCountAll = PlayCountAll,
                         PlayCountWeek = PlayCountWeek,
                         // 按 rank 还原成数组，省掉 JSON 里重复的 key
-                        LikeOrder = LikeRank.OrderBy(kv => kv.Value).Select(kv => kv.Key).ToList()
+                        LikeOrder = LikeRank.OrderBy(kv => kv.Value).Select(kv => kv.Key).ToList(),
+                        ExtraMeta = ExtraMeta
                     };
                 }
                 var dir = Path.GetDirectoryName(CachePath);

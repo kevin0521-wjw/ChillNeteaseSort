@@ -19,6 +19,35 @@ namespace ChillNeteaseSort
         /// <summary>搜索结果的注入不该被重排（用户是按相关度找歌的）。</summary>
         private static bool _skipNextInject;
 
+        // 反射缓存：上游的 _group 字段（PlaylistGroup 枚举：Mine=0 / Collected=1 / Imported=2）
+        private static FieldInfo _groupField;
+        private static bool _groupFieldResolved;
+
+        /// <summary>
+        /// 读上游面板当前在哪个分组。读不到返回 -1（就当作"不是我的/收藏分组"）。
+        /// 用反射而不是强引用私有枚举：上游改字段名时这里静默降级，不影响其它排序模式。
+        /// </summary>
+        private static int CurrentGroup()
+        {
+            if (!_groupFieldResolved)
+            {
+                _groupFieldResolved = true;
+                try
+                {
+                    _groupField = typeof(NeteaseUi).GetField("_group",
+                        BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public);
+                }
+                catch { _groupField = null; }
+            }
+            if (_groupField == null) return -1;
+            try
+            {
+                var v = _groupField.GetValue(null);
+                return v == null ? -1 : Convert.ToInt32(v);
+            }
+            catch { return -1; }
+        }
+
         public static void Install(Harmony harmony)
         {
             var okCount = 0;
@@ -58,18 +87,12 @@ namespace ChillNeteaseSort
             }
             catch (Exception ex) { fail.Add("TryRestoreImported: " + ex.Message); }
 
-            // 4) 屏幕提示（借上游 OnGUI 的渲染时机）
-            try
-            {
-                var rendererType = typeof(PlaylistLink).Assembly.GetType("ChillNetease.Plugin.NeteaseUiRenderer");
-                var m = rendererType?.GetMethod("OnGUI",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (m == null) throw new Exception("找不到 NeteaseUiRenderer.OnGUI");
-                harmony.Patch(m, postfix: new HarmonyMethod(typeof(HarmonyPatches)
-                    .GetMethod(nameof(OnGuiPostfix), AllStatic)));
-                okCount++;
-            }
-            catch (Exception ex) { fail.Add("NeteaseUiRenderer.OnGUI: " + ex.Message); }
+            // 4) 屏幕提示：**不再**挂上游的渲染时机。
+            //    上游 NeteaseUi.Render() 第一行就是「面板没开 → 直接 return」，而它的唯一调用方
+            //    NeteaseUiRenderer.OnGUI() 把这次调用包在 try 里、return 落在 catch 之后，
+            //    Harmony 的 finalizer 按 try 块位置过滤 → 命中不了，补画也补不上（实测验证过）。
+            //    现在改为插件自己在游戏已有的 MonoBehaviour 上 AddComponent 一个只干 OnGUI 的
+            //    ToastRenderer（见 SortPlugin.EnsureToastRenderer），与面板开关完全无关。
 
             // 5) 标记搜索结果注入，跳过重排
             try
@@ -92,6 +115,10 @@ namespace ChillNeteaseSort
         /// 注入前重排。用 ref 替换引用而不是原地改 List ——
         /// 上游有几处传的是 PlaylistStore 里的缓存 List，原地重排会把本地存档的顺序也改掉。
         /// </summary>
+        /// <summary>
+        /// 注入前重排。用 ref 替换引用而不是原地改 List ——
+        /// 上游有几处传的是 PlaylistStore 里的缓存 List，原地重排会把本地存档的顺序也改掉。
+        /// </summary>
         private static void InjectPrefix(ref List<SongInfo> songs, int playIndex, object fmMoreProvider)
         {
             try
@@ -101,10 +128,28 @@ namespace ChillNeteaseSort
                 if (songs == null || songs.Count < 2) return;
 
                 var mode = SortPlugin.CurrentMode;
+
+                // 「按专辑/歌手/歌名」归组只在**用户点开歌单**时才有意义：
+                //   · 面板停留在「我的/收藏」分组 → 点的是网易云歌单 → 排
+                //   · 恢复/重排整张歌单（playIndex < 0）→ 排
+                //   · 点「导入」分组里的本地歌单 → 那是自己挑出来的一批，保持用户挑的顺序
+                // 听歌次数/收藏顺序不受这条限制（它们对任何整张歌单都成立）。
+                if (SortModeInfo.IsGrouping(mode))
+                {
+                    var group = CurrentGroup();
+                    var isImportedGroup = group == 2;
+                    if (isImportedGroup && playIndex >= 0) return;
+                }
+
                 if (mode == SortMode.Default) return;
 
                 var result = SortEngine.Apply(songs, mode);
                 if (result.Songs == null || result.Songs.Count == 0) return;
+
+                // 记住「上游原始顺序」：切回「歌单原顺序」时用它还原。
+                // 只在 playIndex == 0 时记 —— 这时传进来的才是完整原列表；
+                // 其它入口（重排/恢复）传的已经是排过的顺序，记下来会越还原越乱。
+                if (playIndex == 0) SortPlugin.RememberRawOrder(songs);
 
                 songs = result.Songs;
                 SortPlugin.Log($"[Sort] 歌单排序（{SortModeInfo.DisplayName(mode)}）：{result.Note}，" +
@@ -202,11 +247,6 @@ namespace ChillNeteaseSort
                 if ((a[i]?.Id ?? 0) != (b[i]?.Id ?? 0)) return false;
             }
             return true;
-        }
-
-        private static void OnGuiPostfix()
-        {
-            Toast.Draw();
         }
     }
 
