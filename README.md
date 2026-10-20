@@ -8,7 +8,7 @@
 >
 > 独立插件，**不修改** ChillNetease 的任何文件；卸载本插件即完全恢复原样。
 
-**下载：[最新 Release](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest)**（`ChillNeteaseSort.dll`，~44 KB）· MIT
+**下载：[最新 Release](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest)**（`ChillNeteaseSort.dll`，~51 KB）· MIT
 
 ---
 
@@ -66,7 +66,7 @@ Chill with You Lo-Fi Story\
 | 热键 | 作用 |
 |---|---|
 | **F10** | 循环切换排序模式（切换后立刻重排当前已注入的歌单，不自动播放） |
-| **F11** | 一键：把「我喜欢的音乐」按当前模式重排后注入游戏播放列表并开始播放 |
+| **F11** | 一键：把「我喜欢的音乐」**全部曲目**（不受 1000 首截断）按当前模式重排后注入游戏播放列表并开始播放 |
 | **F12** | 一键：把 `Data.ExtraPlaylists` 里配的每张歌单**各存成一个独立歌单**，并在面板里直接打开 |
 
 **F10 的循环顺序**（屏幕下方会浮一条提示）：
@@ -132,7 +132,7 @@ ChillNetease 注入游戏播放列表时会截窗口，默认只放前 1000 首�
 
 | 场景 | 行为 |
 |---|---|
-| 按 **F11** | 拉红心歌单 → 按当前模式全量排序 → 注入并播放第 0 首 |
+| 按 **F11** | 拉红心歌单全量曲目（分批补齐，约 7 秒/3000 首）→ 按当前模式排序 → 注入并播放第 0 首 |
 | 按 **F12** | 拉 `ExtraPlaylists` 里的每张歌单 → 各自存成独立歌单 → 面板打开（不打断当前播放） |
 | 在 F6 面板里点歌单 | 按当前模式排序后注入 |
 | 按 **F10** 改排序模式 | 立刻重排当前歌单 |
@@ -152,6 +152,7 @@ ChillNetease 注入游戏播放列表时会截窗口，默认只放前 1000 首�
 | `Sort.InjectLikedHotkey` | `F11` | 一键注入红心歌单热键 |
 | `Sort.InjectExtraPlaylistsHotkey` | `F12` | 一键注入额外歌单热键 |
 | `Data.ExtraPlaylists` | 空 | 额外歌单 `id:名称, id:名称`，配了才有 F12 |
+| `Data.MaxInjectSongs` | `0` | 单次注入的歌曲数上限，`0` = 全部（3000 首就是 3000 首） |
 | `Refresh.AutoRefreshOnStartup` | `true` | 每次启动联网刷新口味档案 |
 | `Refresh.SyncPlaylistOnStartup` | `true` | 启动时把恢复的歌单同步成云端最新 |
 | `Data.LikeTrackIdsNewestFirst` | `true` | 红心歌单 `trackIds` 是否「最新收藏在前」（方向反了就改 false） |
@@ -169,21 +170,44 @@ GET api/nuser/account/get                       → uid
 GET api/user/playlist?uid=&limit=1000           → 找 specialType=5 的「我喜欢的音乐」
 GET api/v1/play/record?uid=&type=0              → allData[]（含 playCount）
 GET api/v1/play/record?uid=&type=1              → weekData[]
-GET api/v6/playlist/detail?id=&n=1000&s=8       → trackIds[]（收藏顺序）
+GET api/v6/playlist/detail?id=&n=1&s=8          → trackIds[]（收藏顺序，**全量**）
+GET api/song/detail?ids=[200 个 id]             → 分批补齐曲目信息
 ```
 
 cookie 用的是 `%LOCALAPPDATA%\go-musicfox\cookie` —— 也就是你在游戏里 F6 扫码登录后，原生桥自己写的那份，所以**永远与游戏登录态一致**，不用二次配置。
 
 结果缓存到 `BepInEx\config\ChillNeteaseSort.cache.json`，断网时照样能按上次数据排序。
 
+### 为什么大歌单也能完整拉下来（1000 首截断这件事）
+
+上游自带的 `Bridge.GetPlaylistSongs()` 走 `api/v6/playlist/detail`，而那个接口响应里的
+`tracks` 字段**被服务端硬截在 1000 首** —— 实测 `n=1000` 和 `n=5000` 都只回 1000 首。
+一张 2956 首的红心歌单，用上游方法就只能看到三分之一。
+
+绕过办法是：同一个响应里的 `trackIds` 是**全量**的（2956 个一个不少），所以插件自己走两步：
+
+1. `playlist/detail` 只取 `trackIds`（拿到全部 id）；
+2. 每 200 个一批调 `song/detail?ids=[...]` 补齐曲目信息
+   —— 这个接口单次最多吃 200 个 id，传 250 只回 201 首（实测）。
+
+2956 首 = 1 次 + 15 批，本地实测约 **7 秒**。想要少拉点可以把 `Data.MaxInjectSongs` 改成具体数字。
+
 ### 为什么用独立插件而不是 fork 上游
 
 | | 独立插件（本方案） | fork ChillNetease |
 |---|---|---|
-| 体积 | ~40 KB | 16 MB（要一起分发原生 DLL） |
+| 体积 | ~50 KB | 16 MB（要一起分发原生 DLL） |
 | 上游更新 | 互不干扰 | 每次都要 merge |
 | 出问题 | 删掉 DLL 即恢复 | 要重装 |
 | 代价 | 依赖上游方法签名（已全部做 try/catch 降级） | — |
+
+### 关于「只有几首」——那是游戏自己的列表 UI
+
+游戏左侧那个「播放列表」面板是**游戏自带的 UI**，一屏大约显示 10 行，需要滚轮往下滚。
+插件改不了那个面板的行数，但**能决定列表里有多少首歌**。所以：
+
+- 列表里只有十几首 → 大概率是拉取被截断了（见上一节），或者 `Data.MaxInjectSongs` 设了上限；
+- 想看到更多 → 滚轮往下滚，或者按 F11 重新注入全量。
 
 ---
 
@@ -193,6 +217,8 @@ cookie 用的是 `%LOCALAPPDATA%\go-musicfox\cookie` —— 也就是你在游�
 - 「最近收藏」依赖红心歌单的 `trackIds` 顺序。如果你在网易云 App 里给红心歌单换过排序（比如按歌手排），这个顺序会跟着变。
 - 只对「注入游戏播放列表」的歌单生效；漫游 FM 与搜索结果保持原样。
 - 需要 `ChillNetease 0.3.1+`。上游大改（类名/方法签名）会导致某些补丁安装失败 —— 日志里会写明哪几个失败，其余功能仍正常。
+- **一次注入几千首会让游戏播放列表变长**，滚动和切歌仍可用，但低配机器可能觉得列表略钝；嫌重就把 `Data.MaxInjectSongs` 设成 500 / 1000。
+- 曲目信息是**分批拉**的（每批 200 首），网速差时 3000 首要 10 秒上下，期间屏幕角落会显示「补齐曲目 x/y」。
 
 ---
 

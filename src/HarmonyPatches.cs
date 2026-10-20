@@ -19,6 +19,14 @@ namespace ChillNeteaseSort
         /// <summary>搜索结果的注入不该被重排（用户是按相关度找歌的）。</summary>
         private static bool _skipNextInject;
 
+        /// <summary>
+        /// 启动同步的一次性闸门。上游 <c>NeteaseUi.TryRestoreImported()</c> 在恢复失败时会
+        /// **每帧重试**（它自己只有 `_restoreTried` 标志，某些状态下不生效），于是 postfix 也每帧触发。
+        /// 没有这个闸门就会每帧发一次网络请求 —— 实测把 LogOutput.log 刷到了 8 MB / 6.8 万行。
+        /// </summary>
+        private static bool _startupSyncDone;
+        private static bool _startupSyncRunning;
+
         // 反射缓存：上游的 _group 字段（PlaylistGroup 枚举：Mine=0 / Collected=1 / Imported=2）
         private static FieldInfo _groupField;
         private static bool _groupFieldResolved;
@@ -181,6 +189,9 @@ namespace ChillNeteaseSort
             {
                 if (SortPlugin.SortOnStartupRestore == null || !SortPlugin.SortOnStartupRestore.Value) return;
 
+                // 上游 TryRestoreImported 可能每帧被调用 → 这里必须自己挡一次，否则每帧一个网络请求
+                if (_startupSyncDone || _startupSyncRunning) return;
+
                 var latest = PlaylistStore.GetLatest();
                 if (latest?.Songs == null || latest.Songs.Count == 0) return;
 
@@ -191,49 +202,49 @@ namespace ChillNeteaseSort
                 if (bridge == null || !bridge.IsLoggedIn)
                 {
                     SortPlugin.Warn("[Sort] 启动同步跳过：桥接未就绪");
-                    return;
+                    return;   // 不置闸门：桥接还没好，下次再试
                 }
 
-                System.Threading.Tasks.Task.Run(() =>
+                _startupSyncRunning = true;
+
+                // 用 FullPlaylist 而不是 bridge.GetPlaylistSongs：
+                // bridge 走 playlist/detail 的 tracks（硬截 1000 首），拿它去覆盖缓存会让大歌单倒退。
+                FullPlaylist.Load(pid, fresh =>
                 {
-                    try { return bridge.GetPlaylistSongs(pid, true); }
-                    catch (Exception ex)
-                    {
-                        SortPlugin.Warn("[Sort] 启动同步拉取失败: " + ex.Message);
-                        return null;
-                    }
-                }).ContinueWith(t =>
-                {
-                    var fresh = t.Result;
+                    _startupSyncRunning = false;
+                    _startupSyncDone = true;   // 无论成败都不再重试，避免打爆网络
                     if (fresh == null || fresh.Count == 0) return;
 
-                    if (SameIds(latest.Songs, fresh))
+                    try
                     {
-                        SortPlugin.Log($"[Sort] 启动同步：歌单无变化（{fresh.Count} 首）");
-                        return;
+                        if (SameIds(latest.Songs, fresh))
+                        {
+                            SortPlugin.Log($"[Sort] 启动同步：歌单无变化（{fresh.Count} 首）");
+                            return;
+                        }
+
+                        SortPlugin.Log($"[Sort] 启动同步：云端已变化 {latest.Songs.Count} → {fresh.Count} 首，重新注入");
+                        PlaylistStore.Upsert(pid, latest.Name, fresh);
+
+                        var result = SortEngine.Apply(new List<SongInfo>(fresh), SortPlugin.CurrentMode);
+                        PlaylistLink.InjectPlaylist(result.Songs, -1);
+                        Toast.Show($"歌单已同步到最新：{fresh.Count} 首", 3f);
                     }
-
-                    SortPlugin.Log($"[Sort] 启动同步：云端已变化 {latest.Songs.Count} → {fresh.Count} 首，重新注入");
-                    PlaylistStore.Upsert(pid, latest.Name, fresh);
-
-                    // P/Invoke 回调在线程池线程，而 Unity API 只能在主线程 → 排进队列
-                    SortPluginMainThread.Run(() =>
+                    catch (Exception ex)
                     {
-                        try
-                        {
-                            var result = SortEngine.Apply(new List<SongInfo>(fresh), SortPlugin.CurrentMode);
-                            PlaylistLink.InjectPlaylist(result.Songs, -1);
-                            Toast.Show($"歌单已同步到最新：{fresh.Count} 首", 3f);
-                        }
-                        catch (Exception ex)
-                        {
-                            SortPlugin.Warn("[Sort] 启动同步重新注入失败: " + ex.Message);
-                        }
-                    });
+                        SortPlugin.Warn("[Sort] 启动同步重新注入失败: " + ex.Message);
+                    }
+                },
+                err =>
+                {
+                    _startupSyncRunning = false;
+                    _startupSyncDone = true;
+                    SortPlugin.Warn("[Sort] 启动同步拉取失败: " + err);
                 });
             }
             catch (Exception ex)
             {
+                _startupSyncRunning = false;
                 SortPlugin.Warn("[Sort] 启动同步异常: " + ex.Message);
             }
         }

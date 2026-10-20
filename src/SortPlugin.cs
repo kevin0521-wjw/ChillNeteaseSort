@@ -29,7 +29,7 @@ namespace ChillNeteaseSort
     {
         public const string PluginGuid = "com.kevin.chillneteasesort";
         public const string PluginName = "ChillNetease Sort";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.1.1";
         public const string UpstreamGuid = "com.haikisha.chillnetease";
 
         public static SortPlugin Instance;
@@ -47,6 +47,13 @@ namespace ChillNeteaseSort
         public static ConfigEntry<bool> ShowToastEntry;
         public static ConfigEntry<bool> SortOnStartupRestore;
         public static ConfigEntry<string> ExtraPlaylists;
+
+        /// <summary>
+        /// 单次注入的歌曲数上限。0 = 不限制（全部）。
+        /// 上游 `/api/v6/playlist/detail` 的 tracks 硬截 1000 首、trackIds 却是全量，
+        /// 所以这里改用 FullPlaylist 分批补齐；但歌单太大时游戏列表可能卡，留个闸门。
+        /// </summary>
+        public static ConfigEntry<int> MaxInjectSongs;
 
         /// <summary>当前生效的排序模式（运行时可变，切换即写回配置）。</summary>
         public static SortMode CurrentMode = SortMode.Default;
@@ -129,6 +136,12 @@ namespace ChillNeteaseSort
                 "格式：id:名称, id:名称 —— 例如 2462607269:红心合集, 5012345:我的精选。\n" +
                 "id 就是网易云歌单网址里 playlist?id= 后面那串数字；名称可省略。\n" +
                 "留空则不启用 F12。");
+
+            MaxInjectSongs = Config.Bind("Data", "MaxInjectSongs", 0,
+                "单次注入的歌曲数上限。0（默认）= 全部，一张 3000 首的歌单就是 3000 首。\n" +
+                "插件会先用 playlist/detail 拿全量 trackIds，再按 200 首一批补齐曲目信息\n" +
+                "（网易云 song/detail 单次最多 200 个 id），所以「全量」是真的全量，不是 1000 首。\n" +
+                "如果歌单特别大、游戏列表滚动卡，把它改成 500 / 1000 之类的值即可。");
 
             CurrentMode = SortModeInfo.Parse(SortModeEntry.Value, SortMode.Default);
             Logger.LogInfo($"{PluginName} {PluginVersion} loaded，排序模式 = {SortModeInfo.DisplayName(CurrentMode)}");
@@ -477,44 +490,44 @@ namespace ChillNeteaseSort
                 return;
             }
 
-            Toast.Show("正在拉取红心歌单…", 2f);
+            Toast.Show("正在拉取红心歌单全部曲目…", 3f);
             SortPlugin.Log($"[Sort] 一键注入红心歌单 {pid}（模式 {SortModeInfo.DisplayName(CurrentMode)}）");
 
-            // P/Invoke 会阻塞 → 必须丢线程池，别卡主线程
-            System.Threading.Tasks.Task.Run(() =>
-            {
-                try { return bridge.GetPlaylistSongs(pid, true); }
-                catch (Exception ex)
+            // 用 FullPlaylist 而不是 bridge.GetPlaylistSongs：后者走 playlist/detail 的 tracks，
+            // 被服务端硬截在 1000 首，2956 首的红心只能拿到三分之一。
+            FullPlaylist.Load(pid,
+                songs =>
                 {
-                    SortPlugin.Warn("[Sort] 拉取红心歌单失败: " + ex.Message);
-                    return null;
-                }
-            }).ContinueWith(t =>
-            {
-                var songs = t.Result;
-                if (songs == null || songs.Count == 0)
-                {
-                    SortPluginMainThread.Run(() => Toast.Show("红心歌单拉取失败：" + (bridge.LastError() ?? "未知"), 4f));
-                    return;
-                }
+                    var original = songs.Count;
+                    var limit = MaxInjectSongs?.Value ?? 0;
+                    var truncated = limit > 0 && original > limit;
+                    if (truncated)
+                    {
+                        SortPlugin.Log($"[Sort] 注入上限 {limit}，从 {original} 首截断");
+                        songs = songs.Take(limit).ToList();
+                    }
 
-                SortPluginMainThread.Run(() =>
-                {
                     try
                     {
                         // 排序交给 InjectPlaylist 的 Prefix 统一做（避免排两次、"顺序未变"日志误导）
                         PlaylistLink.InjectPlaylist(songs, 0);
                         PlaylistLink.InjectedPlaylistId = pid;
-                        Toast.Show($"已注入 {songs.Count} 首 · {SortModeInfo.DisplayName(CurrentMode)}", 4f);
-                        SortPlugin.Log($"[Sort] 一键注入完成: {songs.Count} 首");
+                        Toast.Show($"已注入 {songs.Count} 首" + (truncated ? $"（云端 {original} 首，上限 {limit}）" : "") +
+                            $" · {SortModeInfo.DisplayName(CurrentMode)}", 4f);
+                        SortPlugin.Log($"[Sort] 一键注入完成: {songs.Count} 首" +
+                            (truncated ? $"（云端共 {original} 首，已按上限截断）" : ""));
                     }
                     catch (Exception ex)
                     {
                         SortPlugin.Warn("[Sort] 一键注入失败: " + ex.Message);
                         Toast.Show("注入失败: " + ex.Message, 4f);
                     }
+                },
+                err => Toast.Show("红心歌单拉取失败：" + err, 4f),
+                (done, total) =>
+                {
+                    if (done < total) Toast.Show($"补齐曲目 {done}/{total}…", 1.5f);
                 });
-            });
         }
 
         /// <summary>
@@ -550,71 +563,75 @@ namespace ChillNeteaseSort
             Toast.Show($"正在拉取 {entries.Count} 张额外歌单…", 3f);
             SortPlugin.Log($"[Sort] 拉取额外歌单 {entries.Count} 张");
 
-            // 逐张串行拉（P/Invoke 阻塞，并行会把桥打乱）
-            System.Threading.Tasks.Task.Run(() =>
+            // 逐张串行拉。走 FullPlaylist 而不是 bridge.GetPlaylistSongs：
+            // 后者被 playlist/detail 的 tracks 截在 1000 首，大歌单会少一大半。
+            var got = new List<KeyValuePair<long, List<SongInfo>>>();
+            int idx = 0;
+
+            void NextOne()
             {
-                var got = new List<KeyValuePair<long, List<SongInfo>>>();
-                foreach (var e in entries)
-                {
-                    try
+                if (idx >= entries.Count) { Finish(); return; }
+                var e = entries[idx++];
+                Toast.Show($"拉取 {idx}/{entries.Count}：{LabelFor(entries, e.Key, raw)}…", 2f);
+                FullPlaylist.Load(e.Key,
+                    songs =>
                     {
-                        var songs = bridge.GetPlaylistSongs(e.Key, true);
                         if (songs != null && songs.Count > 0)
                             got.Add(new KeyValuePair<long, List<SongInfo>>(e.Key, songs));
                         else
                             SortPlugin.Warn($"[Sort] 额外歌单 {e.Key} 拉取为空");
-                    }
-                    catch (Exception ex)
+                        NextOne();
+                    },
+                    err =>
                     {
-                        SortPlugin.Warn($"[Sort] 额外歌单 {e.Key} 拉取失败: {ex.Message}");
-                    }
-                }
-                return got;
-            }).ContinueWith(t =>
+                        SortPlugin.Warn($"[Sort] 额外歌单 {e.Key} 拉取失败: {err}");
+                        NextOne();
+                    });
+            }
+
+            void Finish()
             {
-                var got = t.Result;
-                if (got == null || got.Count == 0)
+                if (got.Count == 0)
                 {
-                    SortPluginMainThread.Run(() => Toast.Show("额外歌单全部拉取失败：" + (bridge.LastError() ?? "未知"), 4f));
+                    Toast.Show("额外歌单全部拉取失败，看 BepInEx 日志", 4f);
                     return;
                 }
 
-                SortPluginMainThread.Run(() =>
+                try
                 {
-                    try
+                    long lastId = 0;
+                    string lastName = null;
+                    List<SongInfo> lastSongs = null;
+
+                    foreach (var kv in got)
                     {
-                        long lastId = 0;
-                        string lastName = null;
-                        List<SongInfo> lastSongs = null;
-
-                        foreach (var kv in got)
-                        {
-                            var label = LabelFor(entries, kv.Key, raw);
-                            // 存成本地歌单：F6 面板「导入」分组可见、重启仍在
-                            PlaylistStore.Upsert(kv.Key, label, kv.Value);
-                            lastId = kv.Key; lastName = label; lastSongs = kv.Value;
-                            SortPlugin.Log($"[Sort] 额外歌单已存本地：{label}（{kv.Key}）{kv.Value.Count} 首");
-                        }
-
-                        // 让 F6 面板的「收藏」分组里立刻能看到这几张歌单（否则要重开面板才刷新）
-                        TryRefreshPanelPlaylists(bridge);
-
-                        if (lastSongs != null)
-                        {
-                            // 不直接塞进播放器 —— 那会顶掉正在放的歌，而用户多半只是想"多一个歌单"。
-                            // 改成：在面板里打开它（用户按 F6 就能看到并播放）。
-                            ShowPlaylistInPanel(lastId, lastName);
-                            Toast.Show($"已单独存好 {got.Count} 张歌单：{lastName}（{lastSongs.Count} 首）· 按 F6 在「导入」里打开", 5f);
-                            SortPlugin.Log($"[Sort] 额外歌单注入完成：共 {got.Count} 张，已在面板打开 {lastName}");
-                        }
+                        var label = LabelFor(entries, kv.Key, raw);
+                        // 存成本地歌单：F6 面板「导入」分组可见、重启仍在
+                        PlaylistStore.Upsert(kv.Key, label, kv.Value);
+                        lastId = kv.Key; lastName = label; lastSongs = kv.Value;
+                        SortPlugin.Log($"[Sort] 额外歌单已存本地：{label}（{kv.Key}）{kv.Value.Count} 首");
                     }
-                    catch (Exception ex)
+
+                    // 让 F6 面板的「收藏」分组里立刻能看到这几张歌单（否则要重开面板才刷新）
+                    TryRefreshPanelPlaylists(bridge);
+
+                    if (lastSongs != null)
                     {
-                        SortPlugin.Warn("[Sort] 额外歌单注入失败: " + ex.Message);
-                        Toast.Show("注入失败: " + ex.Message, 4f);
+                        // 不直接塞进播放器 —— 那会顶掉正在放的歌，而用户多半只是想"多一个歌单"。
+                        // 改成：在面板里打开它（用户按 F6 就能看到并播放）。
+                        ShowPlaylistInPanel(lastId, lastName);
+                        Toast.Show($"已单独存好 {got.Count} 张歌单：{lastName}（{lastSongs.Count} 首）· 按 F6 在「导入」里打开", 5f);
+                        SortPlugin.Log($"[Sort] 额外歌单注入完成：共 {got.Count} 张，已在面板打开 {lastName}");
                     }
-                });
-            });
+                }
+                catch (Exception ex)
+                {
+                    SortPlugin.Warn("[Sort] 额外歌单注入失败: " + ex.Message);
+                    Toast.Show("注入失败: " + ex.Message, 4f);
+                }
+            }
+
+            NextOne();
         }
 
         /// <summary>解析 "id:名称, id:名称"（名称可省略、中英文逗号都认）。</summary>
