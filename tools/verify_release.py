@@ -1,4 +1,6 @@
 # 校验 GitHub Release 附件能否正常下载，并与本地构建产物比对 sha256
+# 用法：python verify_release.py [tag]
+#   不传 tag 就取 latest（注意 latest 只认「非预发布 + 非草稿」的最新一条）
 import json, subprocess, time, hashlib, os, sys
 
 REPO = "kevin0521-wjw/ChillNeteaseSort"
@@ -6,6 +8,7 @@ PROXY = "http://127.0.0.1:7897"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL = os.path.join(ROOT, "bin", "Release", "ChillNeteaseSort.dll")
 OUT = os.path.join(os.environ.get("TEMP", "/tmp"), "cnsort_dl.dll")
+TAG = sys.argv[1].strip() if len(sys.argv) > 1 else ""
 
 
 def token():
@@ -39,7 +42,9 @@ def sha256(path):
 TOKEN = token()
 print("token_len =", len(TOKEN))
 
-rel = api(f"/repos/{REPO}/releases/tags/v1.0.0")
+# 默认取 latest —— 别再把 tag 写死，否则下次发版会拿旧附件比新 DLL，误报「哈希不一致」
+rel = api(f"/repos/{REPO}/releases/tags/{TAG}" if TAG else f"/repos/{REPO}/releases/latest")
+print("release:", rel.get("tag_name"), "|", rel.get("name"))
 assets = rel.get("assets") or []
 if not assets:
     print("❌ 没找到附件:", rel.get("message"))
