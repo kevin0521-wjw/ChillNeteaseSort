@@ -4,7 +4,11 @@
 import json, subprocess, time, hashlib, os, sys
 
 REPO = "kevin0521-wjw/ChillNeteaseSort"
-PROXY = "http://127.0.0.1:7897"
+# 代理默认不挂：本机 Clash 经常是关的，硬挂会直接把校验跑挂（curl 返回空 → 误报哈希不一致）。
+# 需要时 set GH_PROXY=http://127.0.0.1:7897
+PROXY = os.environ.get("GH_PROXY", "").strip()
+# curl 的空代理参数：没设就不传 -x
+PX = ["-x", PROXY] if PROXY else []
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL = os.path.join(ROOT, "bin", "Release", "ChillNeteaseSort.dll")
 OUT = os.path.join(os.environ.get("TEMP", "/tmp"), "cnsort_dl.dll")
@@ -23,7 +27,7 @@ def token():
 
 
 def api(path):
-    p = subprocess.run(["curl", "-s", "-x", PROXY, "-H", "Authorization: token " + TOKEN,
+    p = subprocess.run(["curl", "-s"] + PX + ["-H", "Authorization: token " + TOKEN,
                         "https://api.github.com" + path], capture_output=True, text=True, encoding="utf-8")
     try:
         return json.loads(p.stdout)
@@ -54,7 +58,7 @@ print(f"asset: {a['name']}  size={a['size']}  state={a['state']}")
 
 # 用 API 的 application/octet-stream 端点下载（走 api.github.com，比 releases/download 稳）
 for i in range(6):
-    p = subprocess.run(["curl", "-sL", "-x", PROXY, "--max-time", "60",
+    p = subprocess.run(["curl", "-sL"] + PX + ["--max-time", "60",
                         "-H", "Authorization: token " + TOKEN,
                         "-H", "Accept: application/octet-stream",
                         f"https://api.github.com/repos/{REPO}/releases/assets/{a['id']}",
