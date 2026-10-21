@@ -29,7 +29,7 @@ namespace ChillNeteaseSort
     {
         public const string PluginGuid = "com.kevin.chillneteasesort";
         public const string PluginName = "ChillNetease Sort";
-        public const string PluginVersion = "1.3.0";
+        public const string PluginVersion = "1.3.1";
         public const string UpstreamGuid = "com.haikisha.chillnetease";
 
         public static SortPlugin Instance;
@@ -67,6 +67,13 @@ namespace ChillNeteaseSort
         /// 所以这里改用 FullPlaylist 分批补齐；但歌单太大时游戏列表可能卡，留个闸门。
         /// </summary>
         public static ConfigEntry<int> MaxInjectSongs;
+
+        // ---- 界面放大（F6 面板的歌单/歌曲列表）----
+        public static ConfigEntry<bool> EnlargePanelUi;
+        public static ConfigEntry<int> PanelRowHeight;
+        public static ConfigEntry<int> PanelRowFontSize;
+        public static ConfigEntry<int> PanelWidth;
+        public static ConfigEntry<int> PanelHeight;
 
         /// <summary>当前生效的排序模式（运行时可变，切换即写回配置）。</summary>
         public static SortMode CurrentMode = SortMode.Default;
@@ -152,6 +159,31 @@ namespace ChillNeteaseSort
 
             ShowToastEntry = Config.Bind("UI", "ShowToast", true, "切换排序模式时在屏幕上提示一下");
 
+            // ---- 界面放大 ----
+            // 上游的行高/字号是编译期常量，只能靠 Harmony transpiler 改 IL（见 UiScale.cs）。
+            // 想要回退到原样：EnlargePanelUi=false，或 PanelRowHeight 填 26。
+
+            EnlargePanelUi = Config.Bind("UI", "EnlargePanelUi", true,
+                "放大 F6 面板的列表区：行更高、字号更大、面板更宽（歌单一多就挤成一条条）。\n" +
+                "关掉就完全恢复上游原样（440×470、行高 26、字号 13）。");
+
+            PanelRowHeight = Config.Bind("UI", "PanelRowHeight", 36,
+                "列表每行的高度（像素）。上游是 26，这里默认放大到 36。\n" +
+                "改完要重启游戏才生效（行距是编译期常量，热键改不了）。建议 30~44。\n" +
+                "填 26 或更小 = 保持上游原样。");
+
+            PanelRowFontSize = Config.Bind("UI", "PanelRowFontSize", 18,
+                "歌单/歌曲行的字号（像素）。上游是 13，这里默认放大到 18。建议 15~22。\n" +
+                "填 13 = 保持上游原样。字号改了不用重启，但和 PanelRowHeight 一起调才好看。");
+
+            PanelWidth = Config.Bind("UI", "PanelWidth", 620,
+                "面板宽度（像素）。上游是 440。放大后歌单名能显示得更完整。\n" +
+                "实际生效值会被屏幕宽度限制（不会超出屏幕）。填 440 = 原样。");
+
+            PanelHeight = Config.Bind("UI", "PanelHeight", 600,
+                "面板高度（像素）。上游是 470。行高放大后要相应加高，一屏才看得下同样多的歌单。\n" +
+                "实际生效值受屏幕高度限制。填 470 = 原样。");
+
             ExtraPlaylists = Config.Bind("Data", "ExtraPlaylists", "",
                 "额外歌单（用 F12 一键依次注入，每张都会在本地存成一个独立歌单）。" +
                 "格式：id:名称, id:名称 —— 例如 2462607269:红心合集, 5012345:我的精选。\n" +
@@ -209,6 +241,8 @@ namespace ChillNeteaseSort
             {
                 var harmony = new Harmony(PluginGuid);
                 HarmonyPatches.Install(harmony);
+                // 界面放大：行距/字号是编译期常量，必须在 Harmony 打补丁时改 IL
+                UiScale.Install(harmony);
             }
             catch (Exception ex)
             {
@@ -288,6 +322,7 @@ namespace ChillNeteaseSort
             try
             {
                 EnsureToastRenderer();
+                UiScale.ApplyPerFrame();   // 面板宽高（必须在上游 Tick 之后 —— 它按旧宽算居中 x）
 
                 // 线程池排进来的主线程任务（如启动同步后的重新注入）
                 SortPluginMainThread.Drain();
@@ -297,6 +332,7 @@ namespace ChillNeteaseSort
                 PollHotkey();
 
                 // 沙箱/自动化自检用：设了环境变量才启用（正常玩不生效）
+                SelfTest.Tick();
 
                 // 启动后延迟刷新一次（等上游把登录态恢复好）
                 if (!_refreshStarted && AutoRefreshOnStartup != null && AutoRefreshOnStartup.Value)
@@ -847,5 +883,31 @@ namespace ChillNeteaseSort
         public static void Log(string msg) => _log?.LogInfo(msg);
         public static void Warn(string msg) => _log?.LogWarning(msg);
         public static void Error(string msg) => _log?.LogError(msg);
+
+        private static readonly HashSet<string> _loggedOnce = new HashSet<string>();
+
+        /// <summary>
+        /// 同一条消息只打一次。有些诊断是每帧都会走到的路径（transpiler、样式覆写），
+        /// 直接 Log 会把 LogOutput.log 刷爆 —— 上游 TryRestoreImported 的坑就是这么踩的。
+        /// </summary>
+        public static void LogOnce(string msg)
+        {
+            if (msg == null) return;
+            lock (_loggedOnce)
+            {
+                if (!_loggedOnce.Add(msg)) return;
+            }
+            Log(msg);
+        }
+
+        public static void WarnOnce(string msg)
+        {
+            if (msg == null) return;
+            lock (_loggedOnce)
+            {
+                if (!_loggedOnce.Add(msg)) return;
+            }
+            Warn(msg);
+        }
     }
 }
