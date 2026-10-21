@@ -218,6 +218,136 @@ namespace ChillNeteaseSort
             _currentJob = null;
         }
 
+        // ---------------- 音乐库发现：账号 / 歌单 / 排行榜 ----------------
+        //
+        // 这三个是「所有人用自己的账号」的关键：插件里不写死任何歌单 id，
+        // 全部按当前 cookie 对应账号实时拉。三个接口都只需 MUSIC_U，免 weapi 加密（2026-10 实测）。
+
+        /// <summary>
+        /// 取当前登录账号。<c>account.id</c> 与 <c>profile.userId</c> 实际是同一个值，
+        /// 但历史上出现过只返回其中一个的响应，所以两个都判。
+        /// </summary>
+        public static void GetAccount(Action<long, string> onOk, Action<string> onFail)
+        {
+            Get("https://music.163.com/api/nuser/account/get", body =>
+            {
+                long uid = 0;
+                string nick = null;
+                try
+                {
+                    var root = JObject.Parse(body);
+                    uid = root["account"]?["id"]?.Value<long>() ?? 0;
+                    if (uid <= 0) uid = root["profile"]?["userId"]?.Value<long>() ?? 0;
+                    nick = root["profile"]?["nickname"]?.Value<string>();
+                }
+                catch (Exception ex) { onFail?.Invoke("account 解析失败: " + ex.Message); return; }
+
+                if (uid <= 0)
+                {
+                    onFail?.Invoke("登录态已失效（拿不到账号），请按 F6 重新扫码");
+                    return;
+                }
+                onOk?.Invoke(uid, nick);
+            }, onFail);
+        }
+
+        /// <summary>
+        /// 拉「我创建的歌单」+「我收藏的歌单」。
+        ///
+        /// 分类不看 <c>specialType</c> 而看 <c>creator.userId</c> 是不是自己 ——
+        /// 共享歌单（specialType=1100）owner 仍是自己，按 specialType 分类会漏。
+        /// 只把 <c>specialType == 5</c> 单独标成「我喜欢的音乐」（它的 owner 也是自己，但语义不同）。
+        /// </summary>
+        public static void GetUserPlaylists(long uid, Action<List<LibraryItem>> onOk, Action<string> onFail)
+        {
+            var url = "https://music.163.com/api/user/playlist?uid=" + uid + "&limit=1000&offset=0";
+            Get(url, body =>
+            {
+                var items = new List<LibraryItem>();
+                try
+                {
+                    var root = JObject.Parse(body);
+                    var arr = root["playlist"] as JArray;
+                    if (arr == null) { onOk?.Invoke(items); return; }
+
+                    foreach (var p in arr)
+                    {
+                        var id = p["id"]?.Value<long>() ?? 0;
+                        if (id <= 0) continue;
+
+                        var st = p["specialType"]?.Value<int>() ?? 0;
+                        var creatorId = p["creator"]?["userId"]?.Value<long>() ?? 0;
+                        var creatorName = p["creator"]?["nickname"]?.Value<string>();
+
+                        var item = new LibraryItem
+                        {
+                            Id = id,
+                            Name = p["name"]?.Value<string>() ?? ("歌单 " + id),
+                            TrackCount = p["trackCount"]?.Value<int>() ?? 0,
+                        };
+
+                        if (st == 5)
+                        {
+                            item.Kind = LibraryKind.Liked;
+                            item.Note = "我喜欢的音乐";
+                        }
+                        else if (creatorId == uid)
+                        {
+                            item.Kind = LibraryKind.Mine;
+                            item.Note = st == 1100 ? "共享歌单" : "我创建的";
+                        }
+                        else
+                        {
+                            item.Kind = LibraryKind.Subscribed;
+                            item.Note = string.IsNullOrEmpty(creatorName) ? "收藏" : creatorName;
+                        }
+
+                        items.Add(item);
+                    }
+                }
+                catch (Exception ex) { onFail?.Invoke("playlist 解析失败: " + ex.Message); return; }
+
+                onOk?.Invoke(items);
+            }, onFail);
+        }
+
+        /// <summary>
+        /// 拉官方排行榜清单（实测 64 个：热歌榜 / 新歌榜 / 飙升榜 / 原创榜 / 各种风格榜…）。
+        ///
+        /// 榜单在网易云里就是一个特殊歌单，拿到 id 后可以直接走 <see cref="FullPlaylist.Load"/>，
+        /// 不需要单独的取歌接口（实测 playlist/detail 对榜单 id 同样返回完整 trackIds）。
+        /// </summary>
+        public static void GetToplists(Action<List<LibraryItem>> onOk, Action<string> onFail)
+        {
+            Get("https://music.163.com/api/toplist", body =>
+            {
+                var items = new List<LibraryItem>();
+                try
+                {
+                    var root = JObject.Parse(body);
+                    var arr = root["list"] as JArray;
+                    if (arr == null) { onOk?.Invoke(items); return; }
+
+                    foreach (var t in arr)
+                    {
+                        var id = t["id"]?.Value<long>() ?? 0;
+                        if (id <= 0) continue;
+                        items.Add(new LibraryItem
+                        {
+                            Id = id,
+                            Name = t["name"]?.Value<string>() ?? ("榜单 " + id),
+                            TrackCount = t["trackCount"]?.Value<int>() ?? 0,
+                            Kind = LibraryKind.Toplist,
+                            Note = t["updateFrequency"]?.Value<string>() ?? "",
+                        });
+                    }
+                }
+                catch (Exception ex) { onFail?.Invoke("toplist 解析失败: " + ex.Message); return; }
+
+                onOk?.Invoke(items);
+            }, onFail);
+        }
+
         // ---------------- 刷新流程 ----------------
 
         private static bool _refreshing;

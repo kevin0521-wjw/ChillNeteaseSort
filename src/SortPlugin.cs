@@ -29,7 +29,7 @@ namespace ChillNeteaseSort
     {
         public const string PluginGuid = "com.kevin.chillneteasesort";
         public const string PluginName = "ChillNetease Sort";
-        public const string PluginVersion = "1.2.0";
+        public const string PluginVersion = "1.3.0";
         public const string UpstreamGuid = "com.haikisha.chillnetease";
 
         public static SortPlugin Instance;
@@ -49,6 +49,17 @@ namespace ChillNeteaseSort
         public static ConfigEntry<bool> ShowToastEntry;
         public static ConfigEntry<bool> SortOnStartupRestore;
         public static ConfigEntry<string> ExtraPlaylists;
+
+        // ---- 「我的音乐库」：按当前登录账号自动发现要导入什么 ----
+        public static ConfigEntry<string> MyLibraryHotkey;
+        public static ConfigEntry<bool> MyLibraryIncludeLiked;
+        public static ConfigEntry<bool> MyLibraryIncludeDaily;
+        public static ConfigEntry<bool> MyLibraryIncludeToplists;
+        public static ConfigEntry<string> MyLibraryToplistIds;
+        public static ConfigEntry<bool> MyLibraryIncludeMine;
+        public static ConfigEntry<bool> MyLibraryIncludeSubscribed;
+        public static ConfigEntry<int> MyLibraryPlaylistLimit;
+        public static ConfigEntry<int> MyLibraryMaxSongs;
 
         /// <summary>
         /// 单次注入的歌曲数上限。0 = 不限制（全部）。
@@ -145,7 +156,41 @@ namespace ChillNeteaseSort
                 "额外歌单（用 F12 一键依次注入，每张都会在本地存成一个独立歌单）。" +
                 "格式：id:名称, id:名称 —— 例如 2462607269:红心合集, 5012345:我的精选。\n" +
                 "id 就是网易云歌单网址里 playlist?id= 后面那串数字；名称可省略。\n" +
-                "留空则不启用 F12。");
+                "留空则不启用 F12。\n" +
+                "注意：这里留空是**正常状态**——绝大多数人不需要手填，用 F4「我的音乐库」即可。");
+
+            // ---------------- 我的音乐库 ----------------
+            // 全部按当前登录账号实时拉取，插件里不写死任何歌单 id。
+
+            MyLibraryHotkey = Config.Bind("MyLibrary", "Hotkey", "F4",
+                "一键把「我这个账号的音乐库」导入成游戏里的本地歌单（F1~F12 / 单字母 / None=禁用）。\n" +
+                "拉的是当前登录账号的数据：我喜欢的音乐 / 每日推荐 / 排行榜 / 我的歌单 / 收藏的歌单。\n" +
+                "每次按都重新拉，云端改了歌单也会跟上；导入后的歌单会出现在 F6 面板的「导入」分组里。\n" +
+                "默认 F4 —— 避开别人占掉的键：F6 上游面板、F7/F9 Chill Env Sync、F8 与 F1 ChillAI。");
+
+            MyLibraryIncludeLiked = Config.Bind("MyLibrary", "IncludeLiked", true,
+                "导入「我喜欢的音乐」");
+            MyLibraryIncludeDaily = Config.Bind("MyLibrary", "IncludeDaily", true,
+                "导入「每日推荐」（当天的那 30 多首）");
+            MyLibraryIncludeToplists = Config.Bind("MyLibrary", "IncludeToplists", true,
+                "导入官方排行榜（具体哪几个见 ToplistIds）");
+
+            MyLibraryToplistIds = Config.Bind("MyLibrary", "ToplistIds", "",
+                "要导入哪些排行榜：逗号分隔的榜单 id，顺序就是导入顺序。留空 = 热歌/新歌/飙升/原创 四大榜。\n" +
+                "常用：热歌榜 3778678（200 首）/ 新歌榜 3779629 / 飙升榜 19723756 / 原创榜 2884035。\n" +
+                "网易云一共有 64 个榜单（还有古典/电音/说唱/各种风格榜）。按一次 F4 之后，\n" +
+                "去 BepInEx/LogOutput.log 搜「榜单 」就能看到全部 id + 名字 + 首数，抄想要的填这里。");
+
+            MyLibraryIncludeMine = Config.Bind("MyLibrary", "IncludeMine", true,
+                "导入我自己创建的歌单");
+            MyLibraryIncludeSubscribed = Config.Bind("MyLibrary", "IncludeSubscribed", false,
+                "导入我收藏的（别人的）歌单。默认关：收藏往往有一两百张，一次全拉要很久。");
+
+            MyLibraryPlaylistLimit = Config.Bind("MyLibrary", "PlaylistLimit", 10,
+                "「我的歌单」「收藏的歌单」每类最多导几张（按网易云返回顺序，新的在前）。0 = 不限。");
+
+            MyLibraryMaxSongs = Config.Bind("MyLibrary", "MaxSongsPerPlaylist", 0,
+                "每张歌单最多保留几首（0 = 全部）。歌单特别大、游戏列表滚动卡时改成 200 / 500。");
 
             MaxInjectSongs = Config.Bind("Data", "MaxInjectSongs", 0,
                 "单次注入的歌曲数上限。0（默认）= 全部，一张 3000 首的歌单就是 3000 首。\n" +
@@ -188,6 +233,7 @@ namespace ChillNeteaseSort
         private static bool _hotkeyDownInject;
         private static bool _hotkeyDownExtra;
         private static bool _hotkeyDownDaily;
+        private static bool _hotkeyDownMyLibrary;
 
         // ---- 提示渲染宿主 ----
         private static ToastRenderer _toastRenderer;
@@ -364,6 +410,24 @@ namespace ChillNeteaseSort
             PollOne(InjectHotkey, ref _hotkeyDownInject, InjectLikedPlaylist);
             PollOne(InjectExtraHotkey, ref _hotkeyDownExtra, InjectExtraPlaylists);
             PollOne(DailyHotkey, ref _hotkeyDownDaily, InjectDailyRecommend);
+            PollOne(MyLibraryHotkey, ref _hotkeyDownMyLibrary, InjectMyMusic);
+        }
+
+        /// <summary>
+        /// F4：把当前登录账号的音乐库（收藏 / 歌单 / 日推 / 排行榜）导入成本地歌单。
+        /// 实际逻辑在 <see cref="MyLibrary"/>，这里只做入口与异常兜底。
+        /// </summary>
+        public static void InjectMyMusic()
+        {
+            try
+            {
+                MyLibrary.Run();
+            }
+            catch (Exception ex)
+            {
+                Warn("[Sort] 我的音乐库启动失败: " + ex);
+                Toast.Show("导入失败: " + ex.Message, 4f);
+            }
         }
 
         /// <summary>
@@ -754,7 +818,7 @@ namespace ChillNeteaseSort
         /// 上游的 OnPlaylistsLoaded 是公开静态方法，用反射调用（上游改名就静默跳过，
         /// 歌单仍然能从「导入」分组里看到，只是要重开面板）。
         /// </summary>
-        private static void TryRefreshPanelPlaylists(NeteaseBridge bridge)
+        internal static void TryRefreshPanelPlaylists(NeteaseBridge bridge)
         {
             try
             {

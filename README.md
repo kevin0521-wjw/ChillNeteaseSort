@@ -1,22 +1,69 @@
 # 游戏mod-ChillNetease-放松时光-与你共享的Lo-Fi故事（steam）
 
-> 给 [ChillNetease](https://github.com/V2tin19/ChillNetease)（《Chill with You: Lo-Fi Story》的网易云音乐插件）加三件事：
+> 给 [ChillNetease](https://github.com/V2tin19/ChillNetease)（《Chill with You: Lo-Fi Story》的网易云音乐插件）加上这几件事：
 >
-> 1. **歌单按口味排序** —— 按「听歌次数」「收藏顺序」「专辑」「歌手」重排注入到游戏原生播放列表的歌曲
-> 2. **每次开游戏自动联网刷新** —— 启动时重新拉一遍听歌排行/收藏顺序，并把上次恢复的歌单同步成云端最新版本
-> 3. **把任意歌单单独放成一个歌单** —— 配好 id，一键把「我喜欢的音乐」以外的歌单拉出来独立播放、独立存档
+> 1. **一键导入你自己的整个音乐库** —— 按一次热键，自动把你网易云账号里的**红心歌单 / 每日推荐 / 排行榜 / 自建歌单 / 收藏的歌单**全部拉下来，每张存成游戏里的独立歌单
+> 2. **歌单按口味排序** —— 按「听歌次数」「收藏顺序」「专辑」「歌手」重排注入到游戏原生播放列表的歌曲
+> 3. **每次开游戏自动联网刷新** —— 启动时重新拉一遍听歌排行/收藏顺序，并把上次恢复的歌单同步成云端最新版本
+>
+> **每个人用自己的账号**：插件不内置任何歌单、也不含任何人的账号信息。登录走游戏面板（F6）扫码，
+> 插件自动复用同一份登录态去读**你自己的**云端数据。
 >
 > 独立插件，**不修改** ChillNetease 的任何文件；卸载本插件即完全恢复原样。
 
-**下载：[最新 Release](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest)**（`ChillNeteaseSort.dll`，~55 KB）· MIT
+**下载：[Releases](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest)**
+
+- `ChillNeteaseSort-vX.Y.Z-bundle.zip` —— **一体化包，推荐**：内含 BepInEx + 上游 ChillNetease + 本插件，解压双击 `install.bat` 即可
+- `ChillNeteaseSort.dll` —— 只想给已经装好的人用，单独下这个（~60 KB）
+
+MIT 许可。
 
 ---
 
 ## 它解决什么问题
 
-ChillNetease 把网易云歌单注入游戏原生播放器后，顺序永远是歌单在网易云里的原始顺序（红心歌单 = 收藏时间从新到旧，自建歌单 = 添加顺序）。2954 首红心歌里想听自己最常听的那几首，只能往下翻。
+ChillNetease 把网易云歌单注入游戏原生播放器后，顺序永远是歌单在网易云里的原始顺序（红心歌单 = 收藏时间从新到旧，自建歌单 = 添加顺序）。一张几千首的红心歌单里想听自己最常听的那几首，只能往下翻。
 
-本插件在注入前把列表重排成：
+而且它**只能放红心歌单**。你自己的自建歌单、收藏的合集、每日推荐、各种榜单 —— 都得一个个手动从面板里点，点了还不一定存得下来。
+
+本插件把这些事自动化了：
+
+| | 原版 ChillNetease | 装了本插件 |
+|---|---|---|
+| 能听什么 | 只能点开某一张歌单 | **一次热键**把你的红心 / 日推 / 榜单 / 自建 / 收藏全部变独立歌单 |
+| 歌单顺序 | 网易云里的原始顺序 | 可按听歌次数 / 收藏时间 / 专辑 / 歌手重排 |
+| 断网 | 只能听缓存 | 照常用上次数据排序 |
+
+### 一、我的音乐库（F4）
+
+**这是给新用户的第一条建议路线。** 进游戏按 **F4**，插件会：
+
+1. 读出**你当前登录的这个网易云账号**（uid / 昵称）
+2. 拉你账号下的歌单清单（红心 + 自建 + 收藏别人的）
+3. 拉当天的**每日推荐**
+4. 拉网易云的**排行榜**（默认取热歌榜 / 新歌榜 / 飙升榜 / 原创榜四个）
+5. 按你的配置筛选后，**每张歌单拉全量曲目、各自存成一个本地歌单**
+6. 面板弹出，停在「导入」分组 —— 你想听哪张点哪张
+
+存下来的歌单分组带前缀，方便认：
+
+| 前缀 | 来源 | 默认开关 |
+|---|---|---|
+| `【我的】` | 你的红心歌单（我喜欢的音乐） | 开 |
+| `【日推】` | 今天的每日推荐 | 开 |
+| `【榜单】` | 网易云排行榜 | 开（四个主榜） |
+| `【我的】` + 歌单名 | 你自建的歌单 | 开（最多 10 张） |
+| 歌单原名 | 你收藏的别人的歌单 | **关**（数量通常上百张） |
+
+> 全部走你自己账号的登录态，**插件不含、也不需要任何人的账号信息**。
+> 首次使用请先按 **F6** 扫码登录网易云（第一次登录会弹出二维码，用手机网易云 App 扫）。
+
+导入是一次性的，结果存在 `BepInEx\config\ChillNetease.playlists.json`，**重启游戏仍在**。
+想更新（换了收藏 / 隔了一天想听新日推），再按一次 F4 覆盖即可。
+
+### 二、按口味排序（F10 / F11）
+
+本插件在注入前把列表重排成下面这些模式：
 
 | 模式 | 排序依据 | 数据来源 |
 |---|---|---|
@@ -37,9 +84,21 @@ ChillNetease 把网易云歌单注入游戏原生播放器后，顺序永远是�
 
 ## 安装
 
-前提：已安装 **ChillNetease 0.3.1+**（本插件是它的补丁，靠它的桥接和面板工作）。
+### 方式一：一体化包（推荐，新用户）
 
-1. 从 [Releases](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest) 下载 `ChillNeteaseSort.dll`（或自己 `build.ps1` 编）
+1. 从 [Releases](https://github.com/kevin0521-wjw/ChillNeteaseSort/releases/latest) 下载 `ChillNeteaseSort-vX.Y.Z-bundle.zip`
+2. 解压到任意目录
+3. **右键 `install.bat` → 以管理员身份运行**
+4. 按提示把游戏安装目录（默认自动探测 Steam 路径）确认一下
+5. 启动游戏 → 进游戏 → 按 **F6** 用手机网易云 App 扫码登录 → 按 **F4** 导入你的音乐库
+
+> 游戏必须在 Steam 里启动过一次（要有 `Chill With You_Data` 目录），BepInEx 才注入得进去。
+
+### 方式二：只装本插件
+
+前提：已装好 **ChillNetease 0.3.1+**（本插件是它的补丁，靠它的桥接和面板工作）。
+
+1. 下载 `ChillNeteaseSort.dll`（或自己 `build.ps1` 编）
 2. 放进游戏的 `BepInEx\plugins\ChillNeteaseSort\` 目录（文件夹名随意，但**不要**放进 `plugins\ChillNetease\`，那是上游的地盘）
 3. 启动游戏，进游戏后按 **F11** 试一下
 
@@ -61,14 +120,17 @@ Chill with You Lo-Fi Story\
 
 ## 使用
 
-### 四个热键
+### 五个热键
 
 | 热键 | 作用 |
 |---|---|
+| **F4** | **一键导入我的音乐库**：红心 / 日推 / 榜单 / 自建歌单，全部变成独立歌单（第一次用按这个） |
+| **F5** | 只拉今天的**「每日推荐」**（日推，约 30~35 首），存成一张歌单并弹出面板 |
 | **F10** | 循环切换排序模式（切换后立刻重排当前已注入的歌单，不自动播放） |
-| **F11** | 一键：把「我喜欢的音乐」**全部曲目**（不受 1000 首截断）按当前模式重排后注入游戏播放列表并开始播放 |
-| **F12** | 一键：把 `Data.ExtraPlaylists` 里配的每张歌单**各存成一个独立歌单**，并在面板里直接打开 |
-| **F5** | 一键：拉今天的网易云**「每日推荐」**（日推，约 30~35 首）存成一张歌单并弹出面板 |
+| **F11** | 把「我喜欢的音乐」**全部曲目**（不受 1000 首截断）按当前模式重排后注入游戏播放列表并开始播放 |
+| **F12** | 把 `Data.ExtraPlaylists` 里手填的每张歌单**各存成一个独立歌单**（见下节，适合别人分享的歌单） |
+
+> F6 是上游的面板开关、**不属于本插件**，用来开面板挑歌单。
 
 **F10 的循环顺序**（屏幕下方会浮一条提示）：
 
@@ -85,10 +147,10 @@ Chill with You Lo-Fi Story\
 > **别用 F6/F7/F8/F9**：F6 是上游面板、F7/F9 是 Chill Env Sync、F8 是 ChillAI。
 > 热键只在游戏窗口处于前台时响应，且做了**边沿检测** —— 按住不放只触发一次。
 
-### 把「另一张歌单」单独放出来（F12）
+### 把别人分享的歌单单独放出来（F12）
 
-ChillNetease 只会从面板里点开歌单才能放。如果你想要的是**「我喜欢的音乐」以外的那批歌**
-（比如自己在网易云收藏的某个合集、或者某个 UP 主整理好的场景 BGM 单），配一下 id 就行：
+> F4 覆盖的是**你自己账号里的东西**。如果你想听的是**别人的歌单**（UP 主整理的场景 BGM 合集、
+> 官方 OST、某个爱好者群的私藏），那不在你的账号里，得手填 id：
 
 1. 在网易云网页/App 打开那张歌单，网址里 `playlist?id=` 后面那串数字就是 id
 2. 编辑 `BepInEx\config\com.kevin.chillneteasesort.cfg`：
@@ -96,7 +158,7 @@ ChillNetease 只会从面板里点开歌单才能放。如果你想要的是**�
    ```ini
    [Data]
    ## 额外歌单：id:名称, id:名称
-   ExtraPlaylists = 1374598567:重返未来1999 Scene BGM, 5012345:我的精选
+   ExtraPlaylists = 3778678:热歌榜, 2462607269:某个UP的场景BGM单
    ```
 
 3. 进游戏按 **F12**
@@ -149,6 +211,22 @@ B 站音频流本身是**可以取的**（实测 `x/player/playurl?fnval=16` 返
 
 这样它就成了游戏里一个独立歌单，跟红心歌单互不干扰。
 
+#### ★ 还有第四条路：游戏自带的「导入本地音乐」
+
+游戏自己就有这个功能，不装本插件也能用：
+
+1. 进游戏后点**底部那排圆形按钮里最右边的 🎵 音符框** → 打开「播放列表」面板
+2. 面板左上角「导入」两个字右边有两个小图标：**单文件** / **文件夹**
+3. 点**文件夹**图标（第一次会弹系统文件框，选你的音乐目录；之后记住位置，点一下直接导完）
+4. 顶部「选择标签」下拉里勾「已导入」，就只看你导入的曲子
+
+⚠️ 两个实测坑：
+
+- **导入只在当次有效**。下次开游戏曲库里又是空的，得再点一次那个文件夹图标（它记住了目录，两秒就好）。
+- **游戏存的是路径不是副本**。以后别移动 / 改名那个文件夹，否则条目失效。
+
+单次上限 100 首（`MyDefine.MaxImportMusicCount`）。
+
 ### 排序是在整张歌单上做的
 
 ChillNetease 注入游戏播放列表时会截窗口，默认只放前 1000 首（`MaxInjectedSongs`）。
@@ -161,19 +239,39 @@ ChillNetease 注入游戏播放列表时会截窗口，默认只放前 1000 首�
 
 | 场景 | 行为 |
 |---|---|
+| 按 **F4** | 读当前账号 → 拉红心/日推/榜单/自建（+收藏，可选）→ 每张拉全量 → 各存成独立歌单 → 面板弹到「导入」分组 |
+| 按 **F5** | 拉今天的日推 → 存成「每日推荐 MM-dd」→ 面板自动弹出并停在这批歌上 |
 | 按 **F11** | 拉红心歌单全量曲目（分批补齐，约 7 秒/3000 首）→ 按当前模式排序 → 注入并播放第 0 首 |
 | 按 **F12** | 拉 `ExtraPlaylists` 里的每张歌单 → 各自存成独立歌单 → 面板打开（不打断当前播放） |
-| 按 **F5** | 拉今天的日推 → 存成「每日推荐 MM-dd」→ 面板自动弹出并停在这 34 首上 |
 | 在 F6 面板里点歌单 | 按当前模式排序后注入 |
 | 按 **F10** 改排序模式 | 立刻重排当前歌单 |
 | 切歌 / 点歌 | 沿用已注入的顺序 |
-| 重启游戏 | 先加载上次缓存排序 → 后台联网刷新 → 恢复歌单时会同步云端最新版本 |
+| 重启游戏 | 先加载上次缓存排序 → 后台联网刷新 → 恢复歌单时会同步云端最新版本（F4 存下来的歌单也在） |
 | 漫游 FM / 搜索结果 | **不排序**（保持推荐/相关度顺序） |
 | 点「导入」分组里的本地歌单 + 归组模式 | 保持你挑的顺序（不按专辑/歌手打乱） |
 
 ### 配置文件
 
 `BepInEx\config\com.kevin.chillneteasesort.cfg`
+
+#### 我的音乐库（F4）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `MyLibrary.Hotkey` | `F4` | 导入音乐库的热键 |
+| `MyLibrary.IncludeLiked` | `true` | 导入红心歌单（我喜欢的音乐） |
+| `MyLibrary.IncludeDaily` | `true` | 导入今天的每日推荐 |
+| `MyLibrary.IncludeToplists` | `true` | 导入排行榜 |
+| `MyLibrary.Toplists` | 空 | 指定榜单 id，逗号分隔，顺序即导入顺序。留空 = 热歌榜 3778678 / 新歌榜 3779629 / 飙升榜 19723756 / 原创榜 2884035 |
+| `MyLibrary.IncludeMine` | `true` | 导入你自建的歌单 |
+| `MyLibrary.IncludeSubscribed` | `false` | 导入你**收藏的别人的歌单**（通常上百张，默认关；要的话配合下面两项限制数量） |
+| `MyLibrary.PlaylistLimit` | `10` | 自建 / 收藏歌单最多取几张（按网易云返回顺序） |
+| `MyLibrary.MaxSongsPerPlaylist` | `0` | 每张歌单最多拉多少首，`0` = 全部。设成 `100` 可以让导入快很多 |
+
+> 榜单一共 64 个，想看全部 id：网易云网页版榜单页地址里 `playlist?id=` 那串数字就是。
+> 想更快，可以只留想听的：`MyLibrary.Toplists = 3778678,3779629`
+
+#### 排序与注入
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -182,8 +280,8 @@ ChillNetease 注入游戏播放列表时会截窗口，默认只放前 1000 首�
 | `Sort.InjectLikedHotkey` | `F11` | 一键注入红心歌单热键 |
 | `Sort.InjectExtraPlaylistsHotkey` | `F12` | 一键注入额外歌单热键 |
 | `Sort.DailyRecommendHotkey` | `F5` | 拉每日推荐（日推）的热键 |
-| `UI.OpenPanelOnDaily` | `true` | 按日推后是否自动弹出 F6 面板 |
-| `Data.ExtraPlaylists` | 空 | 额外歌单 `id:名称, id:名称`，配了才有 F12 |
+| `UI.OpenPanelOnDaily` | `true` | 按日推 / F4 后是否自动弹出 F6 面板 |
+| `Data.ExtraPlaylists` | 空 | 别人的歌单 `id:名称, id:名称`，配了才有 F12 |
 | `Data.MaxInjectSongs` | `0` | 单次注入的歌曲数上限，`0` = 全部（3000 首就是 3000 首） |
 | `Refresh.AutoRefreshOnStartup` | `true` | 每次启动联网刷新口味档案 |
 | `Refresh.SyncPlaylistOnStartup` | `true` | 启动时把恢复的歌单同步成云端最新 |
@@ -195,20 +293,23 @@ ChillNetease 注入游戏播放列表时会截窗口，默认只放前 1000 首�
 
 ## 数据是怎么拿到的
 
-ChillNetease 的原生桥 `ChillNetease.dll` 是 Go 编译的二进制，只导出 35 个固定函数，**里面没有听歌排行/收藏顺序接口**，也没法改那个二进制。所以本插件走网易云几个至今**不需要 weapi/eapi 加密**的老接口，带 `MUSIC_U` cookie 直接 GET：
+ChillNetease 的原生桥 `ChillNetease.dll` 是 Go 编译的二进制，只导出 35 个固定函数，**里面没有听歌排行/收藏顺序/歌单清单接口**，也没法改那个二进制。所以本插件走网易云几个至今**不需要 weapi/eapi 加密**的老接口，带 `MUSIC_U` cookie 直接 GET：
 
 ```
-GET api/nuser/account/get                       → uid
-GET api/user/playlist?uid=&limit=1000           → 找 specialType=5 的「我喜欢的音乐」
+GET api/nuser/account/get                       → uid / 昵称
+GET api/user/playlist?uid=&limit=1000           → 歌单清单（红心 specialType=5、自建、收藏）
+GET api/toplist                                 → 64 个榜单清单
+GET api/v3/discovery/recommend/songs?csrf_token= → 今日日推（data.dailySongs）
 GET api/v1/play/record?uid=&type=0              → allData[]（含 playCount）
 GET api/v1/play/record?uid=&type=1              → weekData[]
 GET api/v6/playlist/detail?id=&n=1&s=8          → trackIds[]（收藏顺序，**全量**）
 GET api/song/detail?ids=[200 个 id]             → 分批补齐曲目信息
 ```
 
-cookie 用的是 `%LOCALAPPDATA%\go-musicfox\cookie` —— 也就是你在游戏里 F6 扫码登录后，原生桥自己写的那份，所以**永远与游戏登录态一致**，不用二次配置。
+cookie 用的是 `%LOCALAPPDATA%\go-musicfox\cookie` —— 也就是你在游戏里 F6 扫码登录后，原生桥自己写的那份，所以**永远与游戏登录态一致**，不用二次配置。换账号也只要在游戏里重新扫码一次，插件下次导入就用新账号的数据了。
 
-结果缓存到 `BepInEx\config\ChillNeteaseSort.cache.json`，断网时照样能按上次数据排序。
+排序口径缓存到 `BepInEx\config\ChillNeteaseSort.cache.json`，断网时照样能按上次数据排序。
+F4 存下来的歌单在 `BepInEx\config\ChillNetease.playlists.json`。
 
 ### 为什么大歌单也能完整拉下来（1000 首截断这件事）
 
@@ -228,7 +329,7 @@ cookie 用的是 `%LOCALAPPDATA%\go-musicfox\cookie` —— 也就是你在游�
 
 | | 独立插件（本方案） | fork ChillNetease |
 |---|---|---|
-| 体积 | ~50 KB | 16 MB（要一起分发原生 DLL） |
+| 体积 | ~60 KB（bundle 约 20 MB，含 BepInEx 与上游） | 16 MB（要一起分发原生 DLL） |
 | 上游更新 | 互不干扰 | 每次都要 merge |
 | 出问题 | 删掉 DLL 即恢复 | 要重装 |
 | 代价 | 依赖上游方法签名（已全部做 try/catch 降级） | — |
@@ -249,8 +350,14 @@ cookie 用的是 `%LOCALAPPDATA%\go-musicfox\cookie` —— 也就是你在游�
 - 「最近收藏」依赖红心歌单的 `trackIds` 顺序。如果你在网易云 App 里给红心歌单换过排序（比如按歌手排），这个顺序会跟着变。
 - 只对「注入游戏播放列表」的歌单生效；漫游 FM 与搜索结果保持原样。
 - 需要 `ChillNetease 0.3.1+`。上游大改（类名/方法签名）会导致某些补丁安装失败 —— 日志里会写明哪几个失败，其余功能仍正常。
-- **一次注入几千首会让游戏播放列表变长**，滚动和切歌仍可用，但低配机器可能觉得列表略钝；嫌重就把 `Data.MaxInjectSongs` 设成 500 / 1000。
+- **一次导入几千首会让游戏播放列表变长**，滚动和切歌仍可用，但低配机器可能觉得列表略钝。嫌重就：
+  - `MyLibrary.PlaylistLimit` 调小（自建歌单取几张）
+  - `MyLibrary.MaxSongsPerPlaylist` 设成 `100`
+  - `Data.MaxInjectSongs` 设成 500 / 1000
 - 曲目信息是**分批拉**的（每批 200 首），网速差时 3000 首要 10 秒上下，期间屏幕角落会显示「补齐曲目 x/y」。
+- F4 导入是**整批覆盖**的：再按一次 F4 会重新拉一遍（上次成功的会更新，失败的不动）。要清理旧歌单删掉 `ChillNetease.playlists.json` 里的对应条目即可。
+- 日推是**按天变**的，每天第一次按 F4/F5 会覆盖昨天那张「每日推荐 MM-dd」。
+- 插件只能读网易云的流。QQ 音乐 / Spotify / 本地音频**不通用**，但游戏自带的「导入本地音乐」可以（见上文第四节）。
 
 ---
 
@@ -270,3 +377,5 @@ cookie 用的是 `%LOCALAPPDATA%\go-musicfox\cookie` —— 也就是你在游�
 ## 许可
 
 MIT。本插件不包含 ChillNetease 的任何代码或二进制，仅在运行时通过 Harmony 对它的方法做前后缀补丁。
+
+一键包里的 BepInEx 5 走 [LGPL-3.0](https://www.gnu.org/licenses/lgpl-3.0.html)，上游 ChillNetease 的许可见其仓库 —— 两者都是独立第三方组件，版权归各自作者。
