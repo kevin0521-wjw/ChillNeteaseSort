@@ -88,6 +88,28 @@ namespace ChillNeteaseSort
             return _cookieCache;
         }
 
+        /// <summary>
+        /// 从当前 cookie 里取 <c>__csrf</c> 的值。
+        /// 每日推荐接口带不带它都通，但带上更稳（部分账号/风控状态下不带会返回空列表）；
+        /// 写接口（建歌单/加歌）则**必须**带，漏了会报 code 301「系统错误」（其实是缺 csrf）。
+        /// </summary>
+        public static string GetCsrf()
+        {
+            try
+            {
+                var ck = GetCookie();
+                if (string.IsNullOrEmpty(ck)) return null;
+                foreach (var part in ck.Split(';'))
+                {
+                    var s = part.Trim();
+                    if (s.StartsWith("__csrf=", StringComparison.Ordinal))
+                        return s.Substring(7);
+                }
+            }
+            catch { }
+            return null;
+        }
+
         /// <summary>把 Netscape cookiejar 文本解析成 Cookie 请求头（只取 music.163.com 的键值）。</summary>
         private static string ParseNetscape(string text)
         {

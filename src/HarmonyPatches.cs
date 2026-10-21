@@ -134,6 +134,7 @@ namespace ChillNeteaseSort
                 if (_skipNextInject) { _skipNextInject = false; return; }
                 if (fmMoreProvider != null) return;      // 漫游 FM 会话：保持推荐顺序
                 if (songs == null || songs.Count < 2) return;
+                if (IsDailyRecommend(songs)) return;     // 日推：保持网易云给的推荐顺序
 
                 var mode = SortPlugin.CurrentMode;
 
@@ -167,6 +168,29 @@ namespace ChillNeteaseSort
             {
                 SortPlugin.Warn("[Sort] 排序补丁异常（保持原顺序）: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 本次要注入的是不是「每日推荐」那张本地歌单。
+        /// 判定方式：id 集合与 <c>PlaylistStore</c> 里的日推歌单完全一致。
+        /// 为什么不用 id 参数 —— <c>InjectPlaylist</c> 的签名里只有 songs / playIndex，拿不到 pid，
+        /// 而日推只有 30 首上下，比一遍 id 集合的成本可以忽略。
+        /// 命中就跳过重排：日推的意义就是网易云给的推荐顺序，排掉就没意义了。
+        /// </summary>
+        private static bool IsDailyRecommend(List<SongInfo> songs)
+        {
+            try
+            {
+                var daily = PlaylistStore.Find(DailyPlaylist.LocalPlaylistId);
+                if (daily?.Songs == null || daily.Songs.Count == 0) return false;
+                if (daily.Songs.Count != songs.Count) return false;
+
+                var set = new HashSet<long>();
+                foreach (var s in daily.Songs) set.Add(s.Id);
+                foreach (var s in songs) if (!set.Contains(s.Id)) return false;
+                return true;
+            }
+            catch { return false; }
         }
 
         private static void TickPostfix()

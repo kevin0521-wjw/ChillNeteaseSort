@@ -148,7 +148,7 @@ namespace ChillNeteaseSort
         /// ⚠️ 单位：接口的 <c>dt</c>/<c>duration</c> 都是**毫秒**（如 225013），
         /// 而 SongInfo.Duration 用**秒**（游戏自己缓存的歌单里存的是 194.768 这种值，对照过）。
         /// </summary>
-        private static SongInfo ToSongInfo(JToken o)
+        internal static SongInfo ToSongInfo(JToken o)
         {
             if (o == null) return null;
             var id = o["id"]?.Value<long>() ?? 0;

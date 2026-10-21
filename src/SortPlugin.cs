@@ -29,7 +29,7 @@ namespace ChillNeteaseSort
     {
         public const string PluginGuid = "com.kevin.chillneteasesort";
         public const string PluginName = "ChillNetease Sort";
-        public const string PluginVersion = "1.1.1";
+        public const string PluginVersion = "1.2.0";
         public const string UpstreamGuid = "com.haikisha.chillnetease";
 
         public static SortPlugin Instance;
@@ -41,6 +41,8 @@ namespace ChillNeteaseSort
         public static ConfigEntry<string> CycleHotkey;
         public static ConfigEntry<string> InjectHotkey;
         public static ConfigEntry<string> InjectExtraHotkey;
+        public static ConfigEntry<string> DailyHotkey;
+        public static ConfigEntry<bool> OpenPanelOnDaily;
         public static ConfigEntry<bool> AutoRefreshOnStartup;
         public static ConfigEntry<bool> LikeNewestFirst;
         public static ConfigEntry<string> ManualCookie;
@@ -115,9 +117,17 @@ namespace ChillNeteaseSort
                 "一键依次注入「额外歌单」里配置的所有歌单，每张存成一个独立歌单（F1~F12 / 单字母 / None=禁用）。" +
                 "配合 Data.ExtraPlaylists 用：把几张歌单合成一个、或把自己收藏的一批歌单独拉出来放，都靠这个。");
 
+            DailyHotkey = Config.Bind("Sort", "DailyRecommendHotkey", "F5",
+                "一键拉取网易云「每日推荐」（日推）并在面板里单独打开（F1~F12 / 单字母 / None=禁用）。" +
+                "每次按都会重新请求接口（云端每天只换一次，所以同一天按多次结果一样）。" +
+                "日推会存成一张本地歌单「每日推荐 MM-dd」，每天覆盖同一张。");
+
+            OpenPanelOnDaily = Config.Bind("UI", "OpenPanelOnDaily", true,
+                "按日推热键后自动把 F6 面板弹出来（直接看到今天的 34 首）。" +
+                "不想被面板挡住画面就改成 false，届时手动按 F6 也能看到这张歌单。");
+
             AutoRefreshOnStartup = Config.Bind("Refresh", "AutoRefreshOnStartup", true,
                 "每次启动游戏时联网刷新听歌次数与收藏顺序（约 4 个请求，1~3 秒）");
-
             SortOnStartupRestore = Config.Bind("Refresh", "SyncPlaylistOnStartup", true,
                 "启动恢复上次歌单时，先从网易云重新拉一次歌曲列表（歌单在云端改过也能同步到最新）");
 
@@ -177,6 +187,7 @@ namespace ChillNeteaseSort
         private static bool _hotkeyDown;
         private static bool _hotkeyDownInject;
         private static bool _hotkeyDownExtra;
+        private static bool _hotkeyDownDaily;
 
         // ---- 提示渲染宿主 ----
         private static ToastRenderer _toastRenderer;
@@ -265,7 +276,7 @@ namespace ChillNeteaseSort
         /// 把一张歌单直接「打开」在面板里（等价于用户在「导入」分组里点它）。
         /// 这正是"单独放一个歌单"最舒服的姿势：不打断正在放的歌，用户想听时按 F6 就在眼前。
         /// </summary>
-        private static void ShowPlaylistInPanel(long playlistId, string name)
+        private static void ShowPlaylistInPanel(long playlistId, string name, bool openPanel = false)
         {
             try
             {
@@ -284,6 +295,18 @@ namespace ChillNeteaseSort
                     setGroup.Invoke(null, new[] { Enum.ToObject(pt, 2) });
                 }
                 Log($"[Sort] 已在面板中打开歌单：{name}（{playlistId}）");
+
+                // 可选：顺手把面板弹出来，让用户立刻看到曲目列表（不弹的话得自己按 F6）
+                if (openPanel)
+                {
+                    var isOpenProp = typeof(NeteaseUi).GetProperty("IsOpen", AllStatic);
+                    var opened = isOpenProp?.GetValue(null) is bool b && b;
+                    if (!opened)
+                    {
+                        var toggle = typeof(NeteaseUi).GetMethod("Toggle", AllStatic);
+                        if (toggle != null) { toggle.Invoke(null, null); Log("[Sort] 面板已自动弹出"); }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -340,6 +363,7 @@ namespace ChillNeteaseSort
             PollOne(CycleHotkey, ref _hotkeyDown, CycleMode);
             PollOne(InjectHotkey, ref _hotkeyDownInject, InjectLikedPlaylist);
             PollOne(InjectExtraHotkey, ref _hotkeyDownExtra, InjectExtraPlaylists);
+            PollOne(DailyHotkey, ref _hotkeyDownDaily, InjectDailyRecommend);
         }
 
         /// <summary>
@@ -464,6 +488,61 @@ namespace ChillNeteaseSort
             {
                 SortPlugin.Warn("[Sort] 重排当前歌单失败: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 一键：把今天的网易云「每日推荐」单独放成一张歌单（默认热键 F5）。
+        ///
+        /// 和 F11/F12 一样**不打断正在放的歌** —— 只在 F6 面板里打开，想听时点第一首。
+        /// 日推**不参与排序**：它的价值就在网易云给的推荐顺序（HarmonyPatches 里按 id 集合识别后跳过重排）。
+        /// 本地歌单用固定 id <see cref="DailyPlaylist.LocalPlaylistId"/>，每天覆盖，不会越堆越多。
+        /// </summary>
+        public static void InjectDailyRecommend()
+        {
+            // 日推走 NeteaseApi（UnityWebRequest），不依赖 bridge；但没有 cookie 一定拿不到
+            if (string.IsNullOrEmpty(NeteaseApi.GetCookie()))
+            {
+                Toast.Show("没有网易云登录 cookie，先按 F6 扫码登录", 4f);
+                return;
+            }
+
+            Toast.Show("正在拉取今日推荐…", 2f);
+            Log("[Sort] 拉取每日推荐");
+
+            DailyPlaylist.Load(
+                songs =>
+                {
+                    try
+                    {
+                        var name = DailyPlaylist.LocalName;
+                        PlaylistStore.Upsert(DailyPlaylist.LocalPlaylistId, name, songs);
+
+                        // 兜底：万一上游哪天又对 id 加校验，Upsert 会静默失败。
+                        // 这时不装作成功，直接注入播放器 —— 用户至少能听到今天的日推。
+                        if (PlaylistStore.Find(DailyPlaylist.LocalPlaylistId) == null)
+                        {
+                            Warn("[Sort] 日推存本地歌单失败（Upsert 被忽略）→ 改为直接注入播放器");
+                            PlaylistLink.InjectPlaylist(new List<SongInfo>(songs), 0);
+                            PlaylistLink.InjectedPlaylistId = DailyPlaylist.LocalPlaylistId;
+                            Toast.Show($"今日推荐 {songs.Count} 首，已直接开始播放", 4f);
+                            return;
+                        }
+
+                        // 让面板的歌单列表立刻包含这张（否则要重开面板才刷出来）
+                        var bridge = Plugin.Bridge;
+                        if (bridge != null) TryRefreshPanelPlaylists(bridge);
+
+                        ShowPlaylistInPanel(DailyPlaylist.LocalPlaylistId, name, openPanel: OpenPanelOnDaily?.Value ?? true);
+                        Toast.Show($"今日推荐已就位：{songs.Count} 首 · 按 F6 在「导入」里点第一首", 5f);
+                        Log($"[Sort] 日推已存成本地歌单「{name}」：{songs.Count} 首");
+                    }
+                    catch (Exception ex)
+                    {
+                        Warn("[Sort] 日推存本地失败: " + ex.Message);
+                        Toast.Show("日推处理失败：" + ex.Message, 4f);
+                    }
+                },
+                err => Toast.Show("日推拉取失败：" + err, 5f));
         }
 
         /// <summary>
