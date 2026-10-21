@@ -1,5 +1,6 @@
 # 发布 GitHub Release 并上传构建产物，最后校验远端哈希
-# 用法：python make_release.py v1.2.0 [说明文件.md]
+# 用法：python make_release.py v1.3.0 [说明文件.md] [附件路径 ...]
+#   不给附件路径时，默认传 bin/Release/ChillNeteaseSort.dll + dist/*-bundle.zip
 #   · tag 已存在会复用那个 release（幂等，重跑不会重复建）
 #   · 同名附件已存在会先删再传，避免 asset 堆积
 #   · 代理默认不用（本机 Clash 常挂，直连反而稳）；需要时设 GH_PROXY=http://127.0.0.1:7897
@@ -14,8 +15,7 @@ import urllib.error
 
 REPO = "kevin0521-wjw/ChillNeteaseSort"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOCAL = os.path.join(ROOT, "bin", "Release", "ChillNeteaseSort.dll")
-ASSET_NAME = "ChillNeteaseSort.dll"
+DEFAULT_ASSETS = ["bin/Release/ChillNeteaseSort.dll", "dist/ChillNeteaseSort-v1.3.0-bundle.zip"]
 PROXY = os.environ.get("GH_PROXY", "").strip()
 
 
@@ -81,20 +81,59 @@ def download_asset(asset_id):
         return r.read()
 
 
+def upload_asset(rid, path):
+    """上传一个附件；同名旧附件先删再传（幂等，重跑不会堆一串同名资产）。"""
+    name = os.path.basename(path)
+    data = open(path, "rb").read()
+    sha = hashlib.sha256(data).hexdigest()
+    print("")
+    print(f"[{name}]  {len(data):,} B  sha256={sha[:16]}…")
+
+    rel, _ = api("GET", f"https://api.github.com/repos/{REPO}/releases/{rid}")
+    for a in rel.get("assets") or []:
+        if a["name"] == name:
+            api("DELETE", f"https://api.github.com/repos/{REPO}/releases/assets/{a['id']}")
+            print(f"  删掉同名旧附件 {a['id']}")
+
+    url = (f"https://uploads.github.com/repos/{REPO}/releases/{rid}/assets"
+           f"?name={name}")
+    up, code = api("POST", url, data, ctype="application/octet-stream", timeout=300)
+    if code not in (200, 201):
+        raise SystemExit(f"上传 {name} 失败: {code} {up}")
+    print(f"  上传成功 asset id={up['id']}  size={up['size']}  state={up['state']}")
+
+    time.sleep(2)
+    got = download_asset(up["id"])
+    rsha = hashlib.sha256(got).hexdigest()
+    ok = (len(got) == len(data)) and (rsha == sha)
+    print(f"  回下载 {len(got):,} B  {'✅ 哈希一致' if ok else '❌ 哈希不一致'}")
+    if not ok:
+        raise SystemExit(f"{name} 校验失败")
+    return up["browser_download_url"]
+
+
 def main():
-    if not os.path.exists(LOCAL):
-        raise SystemExit("找不到构建产物: " + LOCAL)
-    tag = sys.argv[1] if len(sys.argv) > 1 else "v1.2.0"
-    body_file = sys.argv[2] if len(sys.argv) > 2 else None
+    tag = sys.argv[1] if len(sys.argv) > 1 else "v1.3.0"
+    body_file = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].endswith(".md") else None
+    extra = sys.argv[3:] if body_file else sys.argv[2:]
+
+    assets = [os.path.join(ROOT, x) for x in (extra or DEFAULT_ASSETS)]
+    assets = [a for a in assets if os.path.exists(a)]
+    if not assets:
+        raise SystemExit("没有可传的产物。先跑 build.ps1 与 tools/make_bundle.py")
+
     if body_file:
         note = open(body_file, encoding="utf-8").read()
     else:
-        note = "见 commit 说明。以下载的 `ChillNeteaseSort.dll` 覆盖到\n" \
-               "`BepInEx/plugins/ChillNeteaseSort/` 即可。\n"
-
-    local = open(LOCAL, "rb").read()
-    sha = hashlib.sha256(local).hexdigest()
-    print(f"本地: {LOCAL}  {len(local)} B  sha256={sha}")
+        note = "\n".join([
+            "见 commit 说明。",
+            "",
+            "**新用户下 `-bundle.zip`** —— 解压后右键 `install.bat`（管理员）即可，",
+            "里面已含 BepInEx + 上游 ChillNetease + 本插件。",
+            "",
+            "已装好 BepInEx + ChillNetease 的，下载 `ChillNeteaseSort.dll` 覆盖到",
+            "`BepInEx/plugins/ChillNeteaseSort/` 即可。",
+        ])
 
     # 1) 建 / 复用 release
     rel, code = api("POST", f"https://api.github.com/repos/{REPO}/releases", {
@@ -108,30 +147,15 @@ def main():
     rid = rel["id"]
     print(f"release id={rid}  url={rel.get('html_url')}")
 
-    # 2) 同名附件先删
-    for a in rel.get("assets") or []:
-        if a["name"] == ASSET_NAME:
-            api("DELETE", f"https://api.github.com/repos/{REPO}/releases/assets/{a['id']}")
-            print(f"删掉旧附件 {a['id']}")
+    urls = [upload_asset(rid, a) for a in assets]
 
-    # 3) 上传
-    url = (f"https://uploads.github.com/repos/{REPO}/releases/{rid}/assets"
-           f"?name={ASSET_NAME}")
-    up, code = api("POST", url, local, ctype="application/octet-stream")
-    if code not in (200, 201):
-        raise SystemExit(f"上传失败: {code} {up}")
-    print(f"上传成功 asset id={up['id']}  size={up['size']}  state={up['state']}")
-
-    # 4) 下载回来校验
-    time.sleep(2)
-    got = download_asset(up["id"])
-    rsha = hashlib.sha256(got).hexdigest()
-    print(f"远端: {len(got)} B  sha256={rsha}")
-    ok = (len(got) == len(local)) and (rsha == sha)
-    print("✅ 哈希一致" if ok else "❌ 哈希不一致")
-    print(f"下载地址: {rel.get('html_url')}")
-    if not ok:
-        sys.exit(1)
+    print("")
+    print("=" * 56)
+    print("全部上传并校验通过：")
+    for u in urls:
+        print("  " + u)
+    print("Release 页面: " + str(rel.get("html_url")))
+    print("=" * 56)
 
 
 if __name__ == "__main__":
