@@ -29,7 +29,7 @@ namespace ChillNeteaseSort
     {
         public const string PluginGuid = "com.kevin.chillneteasesort";
         public const string PluginName = "ChillNetease Sort";
-        public const string PluginVersion = "1.3.1";
+        public const string PluginVersion = "1.3.2";
         public const string UpstreamGuid = "com.haikisha.chillnetease";
 
         public static SortPlugin Instance;
@@ -52,6 +52,9 @@ namespace ChillNeteaseSort
 
         // ---- 「我的音乐库」：按当前登录账号自动发现要导入什么 ----
         public static ConfigEntry<string> MyLibraryHotkey;
+
+        /// <summary>把游戏播放列表的分类切回「网易云」（手动兜底热键）。</summary>
+        public static ConfigEntry<string> SwitchTagHotkey;
         public static ConfigEntry<bool> MyLibraryIncludeLiked;
         public static ConfigEntry<bool> MyLibraryIncludeDaily;
         public static ConfigEntry<bool> MyLibraryIncludeToplists;
@@ -158,6 +161,14 @@ namespace ChillNeteaseSort
                 "也就是游戏里扫码登录后原生桥保存的那份，永远与登录态一致。");
 
             ShowToastEntry = Config.Bind("UI", "ShowToast", true, "切换排序模式时在屏幕上提示一下");
+
+            SwitchTagHotkey = Config.Bind("UI", "SwitchNeteaseTagHotkey", "F9",
+                "把游戏播放列表的分类切回「网易云」（F1~F12 / 单字母 / None=禁用）。\n" +
+                "**什么时候需要按**：游戏播放列表里只剩自带那几首歌、看不到收藏和日推时。\n" +
+                "原因：网易云的歌被上游放在一个自定义分类（AudioTag=32）里，游戏标签栏上没有\n" +
+                "对应按钮，所以不会高亮、也不好找。按一下这个键就切过去了。\n" +
+                "切到「原创 / 全部」等自带分类听游戏原声时不用管，按一次就回来了。\n" +
+                "默认 F9 —— 避开 F6 上游面板、F4 我的音乐库、F5 日推、F10~F12 排序与注入。");
 
             // ---- 界面放大 ----
             // 上游的行高/字号是编译期常量，只能靠 Harmony transpiler 改 IL（见 UiScale.cs）。
@@ -268,6 +279,7 @@ namespace ChillNeteaseSort
         private static bool _hotkeyDownExtra;
         private static bool _hotkeyDownDaily;
         private static bool _hotkeyDownMyLibrary;
+        private static bool _hotkeyDownTag;
 
         // ---- 提示渲染宿主 ----
         private static ToastRenderer _toastRenderer;
@@ -447,6 +459,46 @@ namespace ChillNeteaseSort
             PollOne(InjectExtraHotkey, ref _hotkeyDownExtra, InjectExtraPlaylists);
             PollOne(DailyHotkey, ref _hotkeyDownDaily, InjectDailyRecommend);
             PollOne(MyLibraryHotkey, ref _hotkeyDownMyLibrary, InjectMyMusic);
+            PollOne(SwitchTagHotkey, ref _hotkeyDownTag, SwitchToNeteaseTag);
+        }
+
+        /// <summary>有没有真的往游戏播放列表里注入过歌（没注入过就别乱切分类）。</summary>
+        public static bool HasInjectedSongs()
+        {
+            try { return PlaylistLink.InjectedCount > 0; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 把游戏播放列表的分类切回「网易云」。
+        ///
+        /// 背景（这是本插件存在意义最大的一处补丁）：上游把网易云的歌放进一个自定义
+        /// 分类 <c>AudioTag = 32</c>（游戏原生只用到低 5 位，第 6 位是空的）。
+        /// 游戏 MusicService 订阅了 CurrentAudioTag，**分类一变就按 Tag 重建播放列表**——
+        /// 也就是说你如果切到「原创 / 全部」等自带分类，整个播放列表会被游戏按原生音乐重建，
+        /// 刚注入的几千首网易云歌就**全没了**，看起来就是「插件没生效 / 歌单丢了」。
+        ///
+        /// 上游只在三个时机切分类（注入时 / F6 面板打开时 / 单曲导入时），
+        /// **唯独漏了「启动恢复上次歌单」** —— 而那恰好是每次开游戏都会走的路径。
+        /// 所以会出现：日志显示歌单已注入，但游戏里只有自带那几首。
+        /// 这个方法就是补上那个缺口。
+        /// </summary>
+        public static void SwitchToNeteaseTag()
+        {
+            try
+            {
+                // 上游的公开入口，幂等：本来就在网易云分类时它自己会直接返回 true
+                var ok = PlaylistLink.EnsureNeteaseTag();
+                if (ok)
+                    Toast.Show("播放列表已切到「网易云」分类", 2.5f);
+                else
+                    Toast.Show("切换失败：没找到网易云歌单（先按 F4 或 F6 导入一张）", 3.5f);
+            }
+            catch (Exception ex)
+            {
+                Warn("[Sort] 切「网易云」分类失败: " + ex.Message);
+                Toast.Show("切换失败: " + ex.Message, 3.5f);
+            }
         }
 
         /// <summary>
@@ -562,6 +614,14 @@ namespace ChillNeteaseSort
             }
 
             if (reapply) ReapplyCurrentPlaylist();
+
+            // 重排后顺手把分类切回「网易云」：用户在游戏里点了别的标签就会清掉播放列表，
+            // 这时重排的结果用户是看不见的，容易以为「排序没生效」。
+            if (reapply && HasInjectedSongs())
+            {
+                try { PlaylistLink.EnsureNeteaseTag(); }
+                catch { /* 切分类失败不影响重排 */ }
+            }
         }
 
         /// <summary>

@@ -27,6 +27,9 @@ namespace ChillNeteaseSort
         private static bool _startupSyncDone;
         private static bool _startupSyncRunning;
 
+        /// <summary>启动时自动切「网易云」分类只做一次（上游那个方法会每帧重复调用）。</summary>
+        private static bool _tagEnsuredOnce;
+
         // 反射缓存：上游的 _group 字段（PlaylistGroup 枚举：Mine=0 / Collected=1 / Imported=2）
         private static FieldInfo _groupField;
         private static bool _groupFieldResolved;
@@ -211,6 +214,23 @@ namespace ChillNeteaseSort
         {
             try
             {
+                // ★ 先把游戏播放列表的分类切回「网易云」（v1.3.2 修掉的关键缺口）。
+                //   上游 TryRestoreImported 这条路径**不会**调 EnsureNeteaseTag，
+                //   而游戏 MusicService 订阅了 CurrentAudioTag —— 分类一变就按 Tag 重建播放列表。
+                //   所以只要上次退出时游戏停在「原创/全部」等自带分类，
+                //   开游戏恢复完歌单后，玩家看到的仍然只有自带那几首，
+                //   几千首网易云歌看起来「全没了」—— 这正是用户报的现象。
+                //
+                //   ⚠️ 必须自己挡重复：上游 TryRestoreImported 在某些状态下**每帧**都会调到这里
+                //   （这正是下面启动同步要 _startupSyncDone 闸门的原因，同一个坑）。
+                //   不挡的话 log 会被刷到几十 MB（实测）。
+                if (!_tagEnsuredOnce && SortPlugin.HasInjectedSongs())
+                {
+                    _tagEnsuredOnce = true;
+                    try { SortPlugin.SwitchToNeteaseTag(); }
+                    catch { /* 切分类失败不影响启动同步 */ }
+                }
+
                 if (SortPlugin.SortOnStartupRestore == null || !SortPlugin.SortOnStartupRestore.Value) return;
 
                 // 上游 TryRestoreImported 可能每帧被调用 → 这里必须自己挡一次，否则每帧一个网络请求
