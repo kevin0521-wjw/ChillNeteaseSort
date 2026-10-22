@@ -1,4 +1,4 @@
-# 游戏mod-ChillNetease-放松时光-与你共享的Lo-Fi故事（steam）
+# steam游戏mod-ChillNetease-放松时光-与你共享的Lo-Fi故事 接入网易云api实现歌单共享
 
 > 给 [ChillNetease](https://github.com/V2tin19/ChillNetease)（《Chill with You: Lo-Fi Story》的网易云音乐插件）加上这几件事：
 >
